@@ -7,7 +7,7 @@
  *    layer talks straight to GitHub over the network; we never cache reads/writes.
  * Bump CACHE when the vendored bundle is re-vendored to evict the old one.
  */
-const CACHE = 'focknote-v1-sveltia-0.166.3';
+const CACHE = 'focknote-v2-sveltia-0.166.3';
 
 const SHELL = [
   './',
@@ -16,6 +16,7 @@ const SHELL = [
   './admin/',
   './admin/index.html',
   './admin/sveltia-cms.js',
+  './admin/config.yml',
   './assets/icons/icon-192-maskable.png',
   './assets/icons/icon-512.png',
   './assets/icons/favicon.svg',
@@ -44,7 +45,8 @@ self.addEventListener('fetch', (event) => {
   if (url.origin !== self.location.origin) return;
 
   event.respondWith(
-    caches.match(request).then((cached) => {
+    // ignoreSearch so Sveltia's cache-busted config.yml?... still hits the precache.
+    caches.match(request, { ignoreSearch: true }).then((cached) => {
       if (cached) return cached;
       return fetch(request)
         .then((resp) => {
