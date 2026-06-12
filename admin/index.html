@@ -13,5 +13,20 @@
 <body>
   <!-- Vendored, version-pinned Sveltia CMS bundle (same-origin = offline-cacheable). -->
   <script src="./sveltia-cms.js"></script>
+
+  <!-- The installable app opens here (/admin/), so register + update-check the root
+       service worker from this page too. Script lives at ../sw.js; its default scope
+       is the site root, which covers /admin/ — no Service-Worker-Allowed header needed. -->
+  <script>
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('../sw.js').then((reg) => reg.update()).catch(() => {});
+      let refreshing = false;
+      navigator.serviceWorker.addEventListener('controllerchange', () => {
+        if (refreshing) return;
+        refreshing = true;
+        location.reload();
+      });
+    }
+  </script>
 </body>
 </html>
