@@ -6,6 +6,35 @@ import TurndownService from './vendor/turndown.browser.es.js';
 marked.setOptions({ gfm: true, breaks: false });
 const td = new TurndownService({ headingStyle: 'atx', bulletListMarker: '-', codeBlockStyle: 'fenced' });
 
+// ── [[wiki-links]] ─────────────────────────────────────────────────────────────
+// marked inline extension: [[target]] or [[target|label]] → an in-app note link.
+marked.use({ extensions: [{
+  name: 'wikiLink', level: 'inline',
+  start(src) { const i = src.indexOf('[['); return i < 0 ? undefined : i; },
+  tokenizer(src) {
+    const m = /^\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/.exec(src);
+    if (!m) return;
+    return { type: 'wikiLink', raw: m[0], target: m[1].trim(), label: (m[2] || m[1]).trim() };
+  },
+  renderer(tok) {
+    const name = resolveLink(tok.target);
+    const cls = name ? 'wikilink' : 'wikilink broken';
+    const href = name ? `#/note/${encodeURIComponent(name)}` : '#/';
+    const tip = name ? '' : ` title="No note named ${esc(tok.target)}"`;
+    return `<a class="${cls}" href="${href}" data-wikitarget="${esc(tok.target)}"${tip}>${esc(tok.label)}</a>`;
+  },
+}] });
+
+// Turndown: serialize wiki-link anchors back to [[target]] / [[target|label]] so an
+// edit→save round-trip never corrupts the link into a normal Markdown link.
+td.addRule('wikilink', {
+  filter: (node) => node.nodeName === 'A' && node.classList && node.classList.contains('wikilink'),
+  replacement: (content, node) => {
+    const target = node.getAttribute('data-wikitarget') || content;
+    return content && content !== target ? `[[${target}|${content}]]` : `[[${target}]]`;
+  },
+});
+
 const app = document.getElementById('app');
 const API = 'https://api.github.com';
 
@@ -109,7 +138,37 @@ const esc = (s) => (s || '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&l
 // ── State ─────────────────────────────────────────────────────────────────────
 let CFG = null;
 let TOKEN = '';
-let NOTE = null; // { name, path, sha, title, date, tags, body }
+let NOTE = null;       // current open note { name, path, sha, title, date, tags, body }
+let NOTES = [];        // cache of all notes — powers search + the [[link]] graph
+let LINK_INDEX = {};   // lowercased name/title → canonical note name
+
+function resolveLink(target) {
+  return LINK_INDEX[(target || '').trim().toLowerCase()] || null;
+}
+function wikiTargets(body) {
+  const out = []; const re = /\[\[([^\]|]+)(?:\|[^\]]+)?\]\]/g; let m;
+  while ((m = re.exec(body || ''))) out.push(m[1].trim());
+  return out;
+}
+async function loadAllNotes() {
+  const items = await gh(`/repos/${CFG.repo}/contents/content/notes?ref=${CFG.branch}`, TOKEN);
+  const files = items.filter((f) => f.type === 'file' && f.name.endsWith('.md'));
+  NOTES = await Promise.all(files.map(async (f) => {
+    const data = await gh(`/repos/${CFG.repo}/contents/${f.path}?ref=${CFG.branch}`, TOKEN);
+    return { name: f.name.replace(/\.md$/, ''), sha: data.sha, ...parseNote(decodeB64(data.content)) };
+  }));
+  NOTES.sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));
+  LINK_INDEX = {};
+  for (const n of NOTES) {
+    LINK_INDEX[n.name.toLowerCase()] = n.name;
+    if (n.title) LINK_INDEX[n.title.toLowerCase()] = n.name;
+  }
+  return NOTES;
+}
+async function ensureNotes() {
+  if (!NOTES.length) await loadAllNotes();
+  return NOTES;
+}
 
 function showState(html, isErr) {
   app.innerHTML = `<div class="state${isErr ? ' err' : ''}">${html}</div>`;
@@ -201,6 +260,11 @@ async function saveNote() {
     NOTE.sha = result.content.sha;
     NOTE.title = newTitle;
     NOTE.body = newBody;
+    // keep the in-memory graph fresh: cached note + link index (title may have changed)
+    const cached = NOTES.find((x) => x.name === NOTE.name);
+    if (cached) { cached.title = newTitle; cached.body = newBody; cached.sha = NOTE.sha; }
+    LINK_INDEX[NOTE.name.toLowerCase()] = NOTE.name;
+    if (newTitle) LINK_INDEX[newTitle.toLowerCase()] = NOTE.name;
     titleEl.contentEditable = 'false';
     bodyEl.contentEditable = 'false';
     document.body.classList.remove('editing');
@@ -220,27 +284,38 @@ async function renderList() {
   showState('Loading notes…');
   clearFabs();
   NOTE = null;
-  const items = await gh(`/repos/${CFG.repo}/contents/content/notes?ref=${CFG.branch}`, TOKEN);
-  const files = items.filter((f) => f.type === 'file' && f.name.endsWith('.md'));
-  const notes = await Promise.all(files.map(async (f) => {
-    const data = await gh(`/repos/${CFG.repo}/contents/${f.path}?ref=${CFG.branch}`, TOKEN);
-    const n = parseNote(decodeB64(data.content));
-    return { name: f.name.replace(/\.md$/, ''), ...n };
-  }));
-  notes.sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));
+  await loadAllNotes();
 
-  if (!notes.length) {
+  if (!NOTES.length) {
     showState('No notes yet. Create one in the CMS, then come back.', false);
     return;
   }
   app.innerHTML = `<section class="list">
-    <h2>Notes</h2>
-    ${notes.map((n) => `
-      <a class="card" href="#/note/${encodeURIComponent(n.name)}">
-        <div class="t">${esc(n.title) || n.name}</div>
-        <div class="m">${[fmtDate(n.date), (n.tags || []).join(' · ')].filter(Boolean).join('  —  ')}</div>
-      </a>`).join('')}
+    <div class="list-head">
+      <h2>Notes</h2>
+      <input class="search" type="search" placeholder="Search notes…" aria-label="Search notes" autocomplete="off">
+    </div>
+    <div class="cards"></div>
   </section>`;
+
+  const cardsEl = app.querySelector('.cards');
+  const searchEl = app.querySelector('.search');
+  const draw = (q) => {
+    const query = (q || '').trim().toLowerCase();
+    const hits = !query ? NOTES : NOTES.filter((n) =>
+      (n.title || '').toLowerCase().includes(query) ||
+      (n.tags || []).join(' ').toLowerCase().includes(query) ||
+      (n.body || '').toLowerCase().includes(query));
+    cardsEl.innerHTML = hits.length
+      ? hits.map((n) => `
+        <a class="card" href="#/note/${encodeURIComponent(n.name)}">
+          <div class="t">${esc(n.title) || n.name}</div>
+          <div class="m">${[fmtDate(n.date), (n.tags || []).join(' · ')].filter(Boolean).join('  —  ')}</div>
+        </a>`).join('')
+      : `<div class="state">No notes match “${esc(query)}”.</div>`;
+  };
+  draw('');
+  searchEl.addEventListener('input', () => draw(searchEl.value));
 }
 
 async function renderNote(name) {
@@ -248,7 +323,10 @@ async function renderNote(name) {
   clearFabs();
   document.body.classList.remove('editing');
   const path = `content/notes/${name}.md`;
-  const data = await gh(`/repos/${CFG.repo}/contents/${path}?ref=${CFG.branch}`, TOKEN);
+  const [data] = await Promise.all([
+    gh(`/repos/${CFG.repo}/contents/${path}?ref=${CFG.branch}`, TOKEN),
+    ensureNotes(), // cache + link index, so [[links]] resolve and backlinks compute
+  ]);
   const n = parseNote(decodeB64(data.content));
 
   NOTE = { name, path, sha: data.sha, title: n.title, date: n.date, tags: n.tags, body: n.body };
@@ -257,10 +335,18 @@ async function renderNote(name) {
   if (n.date) chips.push(`<span class="chip"><span class="k">📅</span> ${esc(fmtDate(n.date))}</span>`);
   (n.tags || []).forEach((t) => chips.push(`<span class="chip"><span class="k">🏷</span> ${esc(t)}</span>`));
 
+  const backlinks = NOTES.filter((o) => o.name !== name && wikiTargets(o.body).some((t) => resolveLink(t) === name));
+  const backlinksHtml = backlinks.length ? `
+    <section class="backlinks">
+      <h3>Linked from</h3>
+      ${backlinks.map((o) => `<a class="backlink" href="#/note/${encodeURIComponent(o.name)}">${esc(o.title) || o.name}</a>`).join('')}
+    </section>` : '';
+
   app.innerHTML = `<article class="note">
     <h1 class="title">${esc(n.title) || name}</h1>
     <div class="props">${chips.join('')}</div>
     <div class="body">${marked.parse(n.body || '')}</div>
+    ${backlinksHtml}
   </article>`;
 
   document.querySelector('.back').setAttribute('href', '#/');
