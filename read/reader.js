@@ -23,8 +23,9 @@ async function loadConfig() {
   const res = await fetch('../admin/config.yml', { cache: 'no-cache' });
   if (!res.ok) throw new Error('config.yml not found');
   const text = await res.text();
-  const repo = (text.match(/repo:\s*([^\s#]+)/) || [])[1] || '';
-  const branch = (text.match(/branch:\s*([^\s#]+)/) || [])[1] || 'main';
+  // Line-anchored so we match the real YAML keys, not a `repo:` mentioned in a comment.
+  const repo = (text.match(/^\s*repo:\s*([^\s#]+)/m) || [])[1] || '';
+  const branch = (text.match(/^\s*branch:\s*([^\s#]+)/m) || [])[1] || 'main';
   return { repo, branch };
 }
 
