@@ -71,6 +71,31 @@ Honest limits to design around:
   distinct identities (the dual-identity rig in `ROADMAP.md`), so the history
   shows who wrote what.
 
+## Add it to a repo you already have
+
+You don't need a whole notebook to get the memory half. Any existing repo — a
+coding project, a docs repo — can adopt the bridge: drop in a `content/agent/`
+folder (where Claude keeps the **best of your sessions**: decisions, context,
+reference notes) and wire it into `CLAUDE.md`. Now Claude carries that memory every
+session, and because it's just Markdown in git it's **shareable** — push it and a
+friend who clones the repo gets the same curated brain, diffable and reversible.
+
+Two files do it: `content/agent/MEMORY.md` (the conventions) + `content/agent/INDEX.md`
+(the index). The third, root `CLAUDE.md`, is deliberately a thin block that only
+*imports* the conventions:
+
+```markdown
+<!-- focknote:memory:start -->
+@content/agent/MEMORY.md
+<!-- focknote:memory:end -->
+```
+
+**It won't fight your existing setup.** If the repo already has a `CLAUDE.md` full
+of coding instructions, the bridge **appends** this marker block — it never
+overwrites. Your build/style rules stay; memory layers on top. Remove it any time by
+deleting the block + the `content/agent/` folder. (The skill automates this append
+safely — see `SKILL.md` → "Add the memory bridge to an existing repo".)
+
 ## Optional bridge to Claude Code's built-in memory
 
 Claude Code's own project memory lives at a fixed hidden path the harness loads
