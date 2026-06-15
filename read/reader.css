@@ -111,4 +111,36 @@ main { max-width: var(--maxw); margin: 0 auto; padding: 2.5rem 1.25rem 6rem; }
   padding: .7rem 1.1rem; border-radius: 999px; text-decoration: none;
   background: var(--accent); color: #fff; font-weight: 600;
   box-shadow: 0 6px 20px rgba(0,0,0,.4);
+  /* button reset */
+  appearance: none; border: 0; font-size: 1rem; font-family: inherit; cursor: pointer;
+}
+.fab:disabled { opacity: .6; cursor: default; }
+
+.fab-cancel {
+  position: fixed;
+  right: calc(max(1.25rem, env(safe-area-inset-right)) + 7rem);
+  bottom: calc(1.5rem + env(safe-area-inset-bottom));
+  display: inline-flex; align-items: center; gap: .4rem;
+  padding: .7rem 1rem; border-radius: 999px;
+  background: var(--bg-soft); color: var(--fg-dim);
+  border: 1px solid var(--border); font-weight: 600;
+  box-shadow: 0 6px 20px rgba(0,0,0,.3);
+  appearance: none; font-size: 1rem; font-family: inherit; cursor: pointer;
+}
+.fab-cancel:hover { color: var(--fg); background: var(--bg-hover); }
+
+/* Edit mode */
+[contenteditable="true"] { outline: none; }
+
+.editing .note .title[contenteditable="true"] {
+  border-bottom: 2px solid var(--accent);
+  padding-bottom: .2rem;
+  cursor: text;
+}
+.editing .note .body[contenteditable="true"] {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 1rem 1.1rem;
+  min-height: 10rem;
+  cursor: text;
 }

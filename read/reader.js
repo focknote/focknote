@@ -1,14 +1,15 @@
-// FockNote reading view — renders your notes as clean pages.
-// No build step: plain ESM + a vendored Markdown renderer. Reads notes from the
-// GitHub API using the same PAT you signed into the CMS with.
+// FockNote reading + editing view.
+// No build step: plain ESM + vendored Markdown renderer + HTML→MD serializer.
 import { marked } from './vendor/marked.esm.js';
+import TurndownService from './vendor/turndown.browser.es.js';
 
 marked.setOptions({ gfm: true, breaks: false });
+const td = new TurndownService({ headingStyle: 'atx', bulletListMarker: '-', codeBlockStyle: 'fenced' });
 
 const app = document.getElementById('app');
 const API = 'https://api.github.com';
 
-// ── Token: reuse the CMS login, fall back to our own prompt ──────────────────
+// ── Token ────────────────────────────────────────────────────────────────────
 function getToken() {
   try {
     const u = JSON.parse(localStorage.getItem('sveltia-cms.user') || 'null');
@@ -18,7 +19,7 @@ function getToken() {
 }
 function setToken(t) { localStorage.setItem('focknote.token', t); }
 
-// ── Config: grab repo + branch from the CMS config (no YAML lib needed) ───────
+// ── Config ───────────────────────────────────────────────────────────────────
 async function loadConfig() {
   const res = await fetch('../admin/config.yml', { cache: 'no-cache' });
   if (!res.ok) throw new Error('config.yml not found');
@@ -29,17 +30,34 @@ async function loadConfig() {
   return { repo, branch };
 }
 
-// ── GitHub helpers ───────────────────────────────────────────────────────────
+// ── GitHub helpers ────────────────────────────────────────────────────────────
 async function gh(path, token) {
   const res = await fetch(API + path, {
-    headers: {
-      Authorization: 'token ' + token,
-      Accept: 'application/vnd.github+json',
-    },
+    headers: { Authorization: 'token ' + token, Accept: 'application/vnd.github+json' },
   });
   if (res.status === 401) { const e = new Error('Bad or expired token'); e.code = 401; throw e; }
   if (res.status === 404) { const e = new Error('Not found'); e.code = 404; throw e; }
   if (!res.ok) throw new Error('GitHub API ' + res.status);
+  return res.json();
+}
+
+async function ghPut(path, token, payload) {
+  const res = await fetch(API + path, {
+    method: 'PUT',
+    headers: {
+      Authorization: 'token ' + token,
+      Accept: 'application/vnd.github+json',
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(payload),
+  });
+  if (res.status === 401) { const e = new Error('Bad or expired token'); e.code = 401; throw e; }
+  if (!res.ok) {
+    const j = await res.json().catch(() => ({}));
+    const e = new Error('GitHub ' + res.status + (j.message ? ': ' + j.message : ''));
+    e.code = res.status;
+    throw e;
+  }
   return res.json();
 }
 
@@ -49,7 +67,14 @@ function decodeB64(b64) {
   return new TextDecoder().decode(bytes);
 }
 
-// ── Frontmatter (minimal: title / date / tags) ───────────────────────────────
+function encodeB64(str) {
+  const bytes = new TextEncoder().encode(str);
+  let bin = '';
+  for (const b of bytes) bin += String.fromCharCode(b);
+  return btoa(bin);
+}
+
+// ── Frontmatter ───────────────────────────────────────────────────────────────
 function parseNote(raw) {
   const m = raw.match(/^---\n([\s\S]*?)\n---\n?([\s\S]*)$/);
   if (!m) return { title: '', date: '', tags: [], body: raw };
@@ -67,6 +92,11 @@ function parseNote(raw) {
   return { title, date, tags, body };
 }
 
+function buildFm({ title, date, tags }) {
+  const tagStr = tags.length ? `\n${tags.map((t) => `  - ${t}`).join('\n')}` : ' []';
+  return `---\ntitle: "${title.replace(/"/g, '\\"')}"\ndate: "${date}"\ntags:${tagStr}\n---\n`;
+}
+
 function fmtDate(d) {
   if (!d) return '';
   const t = new Date(d);
@@ -76,9 +106,10 @@ function fmtDate(d) {
 
 const esc = (s) => (s || '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
-// ── State ────────────────────────────────────────────────────────────────────
+// ── State ─────────────────────────────────────────────────────────────────────
 let CFG = null;
 let TOKEN = '';
+let NOTE = null; // { name, path, sha, title, date, tags, body }
 
 function showState(html, isErr) {
   app.innerHTML = `<div class="state${isErr ? ' err' : ''}">${html}</div>`;
@@ -93,9 +124,102 @@ function askToken() {
   };
 }
 
-// ── Views ────────────────────────────────────────────────────────────────────
+// ── FAB ───────────────────────────────────────────────────────────────────────
+function clearFabs() {
+  document.querySelectorAll('.fab, .fab-cancel').forEach((el) => el.remove());
+}
+
+function setFab(mode) {
+  clearFabs();
+  if (mode === 'edit') {
+    const btn = document.createElement('button');
+    btn.className = 'fab'; btn.textContent = '✎ Edit';
+    btn.onclick = enableEdit;
+    document.body.appendChild(btn);
+  } else if (mode === 'save') {
+    const cancel = document.createElement('button');
+    cancel.className = 'fab-cancel'; cancel.textContent = '✕ Cancel';
+    cancel.onclick = cancelEdit;
+    const save = document.createElement('button');
+    save.className = 'fab'; save.textContent = '✓ Save';
+    save.onclick = saveNote;
+    document.body.appendChild(cancel);
+    document.body.appendChild(save);
+  }
+}
+
+// ── Edit mode ─────────────────────────────────────────────────────────────────
+function enableEdit() {
+  const titleEl = document.querySelector('.note .title');
+  const bodyEl = document.querySelector('.note .body');
+  if (!titleEl || !bodyEl) return;
+  titleEl.contentEditable = 'true';
+  bodyEl.contentEditable = 'true';
+  document.body.classList.add('editing');
+  // Put cursor at end of title
+  titleEl.focus();
+  const sel = window.getSelection();
+  const range = document.createRange();
+  range.selectNodeContents(titleEl);
+  range.collapse(false);
+  sel.removeAllRanges();
+  sel.addRange(range);
+  setFab('save');
+}
+
+function cancelEdit() {
+  if (!NOTE) return;
+  const titleEl = document.querySelector('.note .title');
+  const bodyEl = document.querySelector('.note .body');
+  if (!titleEl || !bodyEl) return;
+  titleEl.contentEditable = 'false';
+  bodyEl.contentEditable = 'false';
+  titleEl.textContent = NOTE.title;
+  bodyEl.innerHTML = marked.parse(NOTE.body || '');
+  document.body.classList.remove('editing');
+  setFab('edit');
+}
+
+async function saveNote() {
+  if (!NOTE || !CFG) return;
+  const titleEl = document.querySelector('.note .title');
+  const bodyEl = document.querySelector('.note .body');
+  const saveBtn = document.querySelector('.fab');
+  if (saveBtn) { saveBtn.disabled = true; saveBtn.textContent = 'Saving…'; }
+
+  const newTitle = (titleEl?.textContent || '').trim() || NOTE.title;
+  const newBody = td.turndown(bodyEl?.innerHTML || '');
+  const raw = buildFm({ title: newTitle, date: NOTE.date, tags: NOTE.tags }) + newBody + '\n';
+
+  try {
+    const result = await ghPut(
+      `/repos/${CFG.repo}/contents/${NOTE.path}`,
+      TOKEN,
+      { message: `edit: ${newTitle}`, content: encodeB64(raw), sha: NOTE.sha, branch: CFG.branch }
+    );
+    // Update in-memory state to the committed version
+    NOTE.sha = result.content.sha;
+    NOTE.title = newTitle;
+    NOTE.body = newBody;
+    titleEl.contentEditable = 'false';
+    bodyEl.contentEditable = 'false';
+    document.body.classList.remove('editing');
+    setFab('edit');
+  } catch (e) {
+    if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = '✓ Save'; }
+    if (e.code === 401) { askToken(); return; }
+    const msg = e.code === 403
+      ? 'Save failed (403) — your token needs Contents: write access.'
+      : 'Save failed: ' + e.message;
+    alert(msg);
+  }
+}
+
+// ── Views ─────────────────────────────────────────────────────────────────────
 async function renderList() {
   showState('Loading notes…');
+  clearFabs();
+  NOTE = null;
   const items = await gh(`/repos/${CFG.repo}/contents/content/notes?ref=${CFG.branch}`, TOKEN);
   const files = items.filter((f) => f.type === 'file' && f.name.endsWith('.md'));
   const notes = await Promise.all(files.map(async (f) => {
@@ -121,9 +245,14 @@ async function renderList() {
 
 async function renderNote(name) {
   showState('Loading…');
+  clearFabs();
+  document.body.classList.remove('editing');
   const path = `content/notes/${name}.md`;
   const data = await gh(`/repos/${CFG.repo}/contents/${path}?ref=${CFG.branch}`, TOKEN);
   const n = parseNote(decodeB64(data.content));
+
+  NOTE = { name, path, sha: data.sha, title: n.title, date: n.date, tags: n.tags, body: n.body };
+
   const chips = [];
   if (n.date) chips.push(`<span class="chip"><span class="k">📅</span> ${esc(fmtDate(n.date))}</span>`);
   (n.tags || []).forEach((t) => chips.push(`<span class="chip"><span class="k">🏷</span> ${esc(t)}</span>`));
@@ -132,12 +261,13 @@ async function renderNote(name) {
     <h1 class="title">${esc(n.title) || name}</h1>
     <div class="props">${chips.join('')}</div>
     <div class="body">${marked.parse(n.body || '')}</div>
-  </article>
-  <a class="fab" href="../admin/#/collections/notes/entries/${encodeURIComponent(name)}">✎ Edit</a>`;
+  </article>`;
+
   document.querySelector('.back').setAttribute('href', '#/');
+  setFab('edit');
 }
 
-// ── Router ───────────────────────────────────────────────────────────────────
+// ── Router ────────────────────────────────────────────────────────────────────
 async function route() {
   if (!CFG) {
     try { CFG = await loadConfig(); } catch (e) { showState('Could not read config.yml.', true); return; }

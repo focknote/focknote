@@ -1,5 +1,34 @@
 # Vendored dependencies
 
+## marked
+
+- **File:** `read/vendor/marked.esm.js`
+- **Package:** `marked`
+- **Pinned version:** `12.0.2`
+- **Source:** `https://cdn.jsdelivr.net/npm/marked@12.0.2/src/marked.min.js` (ESM build)
+
+Used by the `/read/` reader to render Markdown → HTML.
+
+## Turndown
+
+- **File:** `read/vendor/turndown.browser.es.js`
+- **Package:** `turndown`
+- **Pinned version:** `7.2.4`
+- **Source:** `https://cdn.jsdelivr.net/npm/turndown@7.2.4/lib/turndown.browser.es.js`
+
+Used by the `/read/` in-place editor to serialize contenteditable HTML → Markdown on save.
+
+### Re-vendoring Turndown
+
+```sh
+curl -sL https://cdn.jsdelivr.net/npm/turndown@<VERSION>/lib/turndown.browser.es.js \
+  -o read/vendor/turndown.browser.es.js
+```
+
+Then bump the `CACHE` constant in `sw.js`.
+
+---
+
 ## Sveltia CMS
 
 - **File:** `admin/sveltia-cms.js`
