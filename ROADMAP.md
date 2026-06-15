@@ -37,7 +37,16 @@ malformed `api.github.com` URL → "NetworkError" in the browser.
 
 Phase 1 is stack-agnostic and ships regardless of the editor choice below.
 
-## Phase 2 — Edit in place (next)
+## Phase 2 — Edit in place (SHIPPED 2026-06-16)
+
+**Status:** built + working (`read/reader.js`, commit `198336a`). Required pieces
+1–4 below are done: `marked` render, `contenteditable` body + inline title, vendored
+**Turndown** (`read/vendor/turndown.browser.es.js`) for HTML→Markdown on save, and
+Contents API `PUT` (sha + base64 + rebuilt frontmatter, 401/403 handled, ✎ Edit /
+✓ Save / ✕ Cancel FABs). Deferred to Phase 3: slash menu / callouts / drag, plus
+date/tags **editing** (currently preserved on save, not yet editable inline). Known
+residual risk = HTML↔Markdown round-trip fidelity on nested lists / code blocks /
+pasted content — acceptable for v1.
 
 Kill the form. One page that renders by default; an **Edit** toggle flips the
 body to editable. Save commits the `.md` straight to the notes repo via the
