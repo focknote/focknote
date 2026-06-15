@@ -85,9 +85,14 @@ and pasted content are edge cases. v1 will be good with rough edges.
 Markdown editor with live preview (split/toggle) instead of true WYSIWYG — much
 less round-trip risk, slightly less "in-place" feel.
 
-## Phase 3 — Extras
+## Phase 3 — Extras (partial — 2026-06-16)
 
-`[[backlinks]]`, search, callouts, daily notes.
+**Shipped** (`read/reader.js`, commit `e70cc14`): `[[wiki-links]]` (inline `marked`
+extension → in-app links, `.broken` for unresolved + a Turndown rule that round-trips
+them back to `[[..]]` on save), **backlinks** ("Linked from" on each note), and
+client-side **search** over title/tags/body (backed by a notes cache + name/title link
+index). **Still open:** callouts, daily notes, slash menu, inline date/tags editing,
+new-note creation from `/read/`.
 
 ## Dev / sync loop (Phase 2 prerequisite)
 
