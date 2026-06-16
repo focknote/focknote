@@ -35,6 +35,47 @@ td.addRule('wikilink', {
   },
 });
 
+// ── Callouts ───────────────────────────────────────────────────────────────────
+// Obsidian/GitHub style: a blockquote whose first line is `[!type] optional title`.
+const CALLOUT_ICON = { note: '📝', info: 'ℹ️', tip: '💡', warning: '⚠️', danger: '🚨', success: '✅', question: '❓' };
+marked.use({ extensions: [{
+  name: 'callout', level: 'block',
+  start(src) { const m = src.match(/^> *\[!/m); return m ? m.index : undefined; },
+  tokenizer(src) {
+    const m = /^> *\[!(\w+)\][ \t]*(.*)(?:\n|$)((?:>.*(?:\n|$))*)/.exec(src);
+    if (!m) return;
+    const inner = (m[3] || '').replace(/^>[ \t]?/gm, '').replace(/\s+$/, '');
+    const tok = { type: 'callout', raw: m[0], calloutType: m[1].toLowerCase(), title: m[2].trim(), tokens: [] };
+    this.lexer.blockTokens(inner, tok.tokens);
+    return tok;
+  },
+  renderer(tok) {
+    const type = tok.calloutType;
+    const def = type.charAt(0).toUpperCase() + type.slice(1);
+    const icon = CALLOUT_ICON[type] || '📌';
+    const body = this.parser.parse(tok.tokens);
+    return `<div class="callout callout-${esc(type)}" data-callout="${esc(type)}">`
+      + `<div class="callout-title"><span class="callout-ico">${icon}</span> ${esc(tok.title || def)}</div>`
+      + `<div class="callout-body">${body}</div></div>`;
+  },
+}] });
+
+// Turndown: callout <div> → `> [!type] title` + quoted body (round-trip safe).
+td.addRule('callout', {
+  filter: (node) => node.nodeType === 1 && node.classList && node.classList.contains('callout'),
+  replacement: (content, node) => {
+    const type = node.getAttribute('data-callout') || 'note';
+    const def = type.charAt(0).toUpperCase() + type.slice(1);
+    const titleEl = node.querySelector('.callout-title');
+    const bodyEl = node.querySelector('.callout-body');
+    const rawTitle = titleEl ? titleEl.textContent.replace(/^[^\w]*/, '').trim() : '';
+    const title = rawTitle && rawTitle.toLowerCase() !== def.toLowerCase() ? ' ' + rawTitle : '';
+    const bodyMd = bodyEl ? td.turndown(bodyEl.innerHTML).trim() : '';
+    const quoted = bodyMd ? '\n' + bodyMd.split('\n').map((l) => (l ? '> ' + l : '>')).join('\n') : '';
+    return `\n\n> [!${type}]${title}${quoted}\n\n`;
+  },
+});
+
 const app = document.getElementById('app');
 const API = 'https://api.github.com';
 
@@ -170,6 +211,152 @@ async function ensureNotes() {
   return NOTES;
 }
 
+let PENDING_EDIT = false; // enter edit mode right after the next note render (new/daily notes)
+
+// ── Note creation (new note + daily note) ──────────────────────────────────────
+const slugify = (s) => (s || '').toLowerCase().trim()
+  .replace(/[^\w\s-]/g, '').replace(/\s+/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
+const todayISO = () => new Date().toISOString();
+const datePart = (iso) => (iso ? String(iso).slice(0, 10) : '');
+
+async function createNote({ title, date, tags = [], body = '' }) {
+  const d = date || todayISO();
+  const base = `${datePart(d)}-${slugify(title) || 'untitled'}`;
+  let name = base, i = 2;
+  while (NOTES.some((x) => x.name === name)) name = `${base}-${i++}`;
+  const path = `content/notes/${name}.md`;
+  const raw = buildFm({ title, date: d, tags }) + body + '\n';
+  const result = await ghPut(`/repos/${CFG.repo}/contents/${path}`, TOKEN,
+    { message: `create: ${title}`, content: encodeB64(raw), branch: CFG.branch });
+  const note = { name, sha: result.content.sha, title, date: d, tags, body };
+  NOTES.unshift(note);
+  LINK_INDEX[name.toLowerCase()] = name;
+  if (title) LINK_INDEX[title.toLowerCase()] = name;
+  return name;
+}
+
+function handleWriteErr(e) {
+  if (e.code === 401) { askToken(); return; }
+  alert(e.code === 403 ? 'Failed (403) — your token needs Contents: write access.' : 'Failed: ' + e.message);
+}
+
+async function newNote() {
+  const title = prompt('New note title:');
+  if (title == null) return;
+  try {
+    const name = await createNote({ title: title.trim() || 'Untitled', date: todayISO(), tags: [] });
+    PENDING_EDIT = true;
+    location.hash = `#/note/${encodeURIComponent(name)}`;
+  } catch (e) { handleWriteErr(e); }
+}
+
+async function openDaily() {
+  await ensureNotes();
+  const dp = datePart(todayISO());
+  const existing = NOTES.find((x) => (x.tags || []).includes('daily') && datePart(x.date) === dp);
+  if (existing) { location.hash = `#/note/${encodeURIComponent(existing.name)}`; return; }
+  const title = new Date().toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+  try {
+    const name = await createNote({ title, date: todayISO(), tags: ['daily'] });
+    PENDING_EDIT = true;
+    location.hash = `#/note/${encodeURIComponent(name)}`;
+  } catch (e) { handleWriteErr(e); }
+}
+
+// ── Props (date + tags), view + inline edit ────────────────────────────────────
+function propsView(n) {
+  const chips = [];
+  if (n.date) chips.push(`<span class="chip"><span class="k">📅</span> ${esc(fmtDate(n.date))}</span>`);
+  (n.tags || []).forEach((t) => chips.push(`<span class="chip"><span class="k">🏷</span> ${esc(t)}</span>`));
+  return chips.join('');
+}
+function propsEdit(n) {
+  return `<input class="prop-date" type="date" value="${esc(datePart(n.date))}" aria-label="Date">
+    <input class="prop-tags" type="text" value="${esc((n.tags || []).join(', '))}" placeholder="tags, comma, separated" aria-label="Tags">`;
+}
+
+// ── Slash menu (type "/" in the editor body) ───────────────────────────────────
+function insertHTMLBlock(html) { document.execCommand('insertHTML', false, html); }
+function insertCallout(type) {
+  const def = type.charAt(0).toUpperCase() + type.slice(1);
+  const icon = CALLOUT_ICON[type] || '📌';
+  insertHTMLBlock(`<div class="callout callout-${type}" data-callout="${type}"><div class="callout-title"><span class="callout-ico">${icon}</span> ${def}</div><div class="callout-body"><p>&nbsp;</p></div></div><p><br></p>`);
+}
+const SLASH_ITEMS = [
+  { key: 'h1', label: 'Heading 1', hint: 'H1', run: () => document.execCommand('formatBlock', false, 'H1') },
+  { key: 'h2', label: 'Heading 2', hint: 'H2', run: () => document.execCommand('formatBlock', false, 'H2') },
+  { key: 'h3', label: 'Heading 3', hint: 'H3', run: () => document.execCommand('formatBlock', false, 'H3') },
+  { key: 'bullet', label: 'Bullet list', hint: '•', run: () => document.execCommand('insertUnorderedList') },
+  { key: 'number', label: 'Numbered list', hint: '1.', run: () => document.execCommand('insertOrderedList') },
+  { key: 'quote', label: 'Quote', hint: '❝', run: () => document.execCommand('formatBlock', false, 'BLOCKQUOTE') },
+  { key: 'code', label: 'Code block', hint: '</>', run: () => insertHTMLBlock('<pre><code>code</code></pre><p><br></p>') },
+  { key: 'divider', label: 'Divider', hint: '―', run: () => document.execCommand('insertHorizontalRule') },
+  { key: 'note callout', label: 'Callout: Note', hint: '📝', run: () => insertCallout('note') },
+  { key: 'tip callout', label: 'Callout: Tip', hint: '💡', run: () => insertCallout('tip') },
+  { key: 'warning callout', label: 'Callout: Warning', hint: '⚠️', run: () => insertCallout('warning') },
+];
+let SLASH = null; // { menu, query, items, active }
+
+function openSlash() {
+  closeSlash();
+  const menu = document.createElement('div');
+  menu.className = 'slash-menu';
+  document.body.appendChild(menu);
+  SLASH = { menu, query: '', items: SLASH_ITEMS.slice(), active: 0 };
+  positionSlash();
+  drawSlash();
+}
+function closeSlash() { if (SLASH) { SLASH.menu.remove(); SLASH = null; } }
+function positionSlash() {
+  if (!SLASH) return;
+  const sel = window.getSelection();
+  if (!sel.rangeCount) return;
+  let r = sel.getRangeAt(0).getBoundingClientRect();
+  if (!r || (!r.left && !r.top)) {
+    const b = document.querySelector('.note .body');
+    r = b ? b.getBoundingClientRect() : { left: 40, bottom: 120 };
+  }
+  SLASH.menu.style.left = Math.round(r.left) + 'px';
+  SLASH.menu.style.top = Math.round((r.bottom || r.top) + window.scrollY + 6) + 'px';
+}
+function drawSlash() {
+  if (!SLASH) return;
+  const q = SLASH.query.toLowerCase();
+  SLASH.items = SLASH_ITEMS.filter((it) => it.label.toLowerCase().includes(q) || it.key.includes(q));
+  if (SLASH.active >= SLASH.items.length) SLASH.active = 0;
+  SLASH.menu.innerHTML = SLASH.items.length
+    ? SLASH.items.map((it, i) => `<div class="slash-item${i === SLASH.active ? ' active' : ''}" data-i="${i}"><span class="slash-hint">${esc(it.hint)}</span> ${esc(it.label)}</div>`).join('')
+    : `<div class="slash-empty">no match</div>`;
+  SLASH.menu.querySelectorAll('.slash-item').forEach((el) => {
+    el.onmousedown = (e) => { e.preventDefault(); chooseSlash(+el.dataset.i); };
+  });
+}
+function chooseSlash(i) {
+  if (!SLASH) return;
+  const it = SLASH.items[i];
+  const qlen = SLASH.query.length;
+  closeSlash();
+  const sel = window.getSelection();
+  for (let k = 0; k < qlen + 1; k++) sel.modify('extend', 'backward', 'character'); // grab "/query"
+  document.execCommand('delete');
+  if (it) it.run();
+}
+function onBodyInput(e) {
+  if (SLASH) {
+    if (e.inputType === 'insertText' && e.data && e.data !== ' ') { SLASH.query += e.data; drawSlash(); positionSlash(); return; }
+    if (e.inputType === 'deleteContentBackward') { if (!SLASH.query) closeSlash(); else { SLASH.query = SLASH.query.slice(0, -1); drawSlash(); } return; }
+    closeSlash(); return;
+  }
+  if (e.inputType === 'insertText' && e.data === '/') openSlash();
+}
+function onBodyKey(e) {
+  if (!SLASH) return;
+  if (e.key === 'ArrowDown') { e.preventDefault(); SLASH.active = (SLASH.active + 1) % SLASH.items.length; drawSlash(); }
+  else if (e.key === 'ArrowUp') { e.preventDefault(); SLASH.active = (SLASH.active - 1 + SLASH.items.length) % SLASH.items.length; drawSlash(); }
+  else if (e.key === 'Enter') { e.preventDefault(); chooseSlash(SLASH.active); }
+  else if (e.key === 'Escape') { e.preventDefault(); closeSlash(); }
+}
+
 function showState(html, isErr) {
   app.innerHTML = `<div class="state${isErr ? ' err' : ''}">${html}</div>`;
 }
@@ -211,9 +398,11 @@ function setFab(mode) {
 function enableEdit() {
   const titleEl = document.querySelector('.note .title');
   const bodyEl = document.querySelector('.note .body');
+  const propsEl = document.querySelector('.note .props');
   if (!titleEl || !bodyEl) return;
   titleEl.contentEditable = 'true';
   bodyEl.contentEditable = 'true';
+  if (propsEl) propsEl.innerHTML = propsEdit(NOTE);
   document.body.classList.add('editing');
   // Put cursor at end of title
   titleEl.focus();
@@ -228,27 +417,36 @@ function enableEdit() {
 
 function cancelEdit() {
   if (!NOTE) return;
+  closeSlash();
   const titleEl = document.querySelector('.note .title');
   const bodyEl = document.querySelector('.note .body');
+  const propsEl = document.querySelector('.note .props');
   if (!titleEl || !bodyEl) return;
   titleEl.contentEditable = 'false';
   bodyEl.contentEditable = 'false';
   titleEl.textContent = NOTE.title;
   bodyEl.innerHTML = marked.parse(NOTE.body || '');
+  if (propsEl) propsEl.innerHTML = propsView(NOTE);
   document.body.classList.remove('editing');
   setFab('edit');
 }
 
 async function saveNote() {
   if (!NOTE || !CFG) return;
+  closeSlash();
   const titleEl = document.querySelector('.note .title');
   const bodyEl = document.querySelector('.note .body');
+  const propsEl = document.querySelector('.note .props');
   const saveBtn = document.querySelector('.fab');
   if (saveBtn) { saveBtn.disabled = true; saveBtn.textContent = 'Saving…'; }
 
   const newTitle = (titleEl?.textContent || '').trim() || NOTE.title;
   const newBody = td.turndown(bodyEl?.innerHTML || '');
-  const raw = buildFm({ title: newTitle, date: NOTE.date, tags: NOTE.tags }) + newBody + '\n';
+  const dateEl = propsEl?.querySelector('.prop-date');
+  const tagsEl = propsEl?.querySelector('.prop-tags');
+  const newDate = dateEl ? (dateEl.value ? dateEl.value + 'T00:00:00.000Z' : '') : NOTE.date;
+  const newTags = tagsEl ? tagsEl.value.split(',').map((s) => s.trim()).filter(Boolean) : NOTE.tags;
+  const raw = buildFm({ title: newTitle, date: newDate, tags: newTags }) + newBody + '\n';
 
   try {
     const result = await ghPut(
@@ -260,13 +458,16 @@ async function saveNote() {
     NOTE.sha = result.content.sha;
     NOTE.title = newTitle;
     NOTE.body = newBody;
+    NOTE.date = newDate;
+    NOTE.tags = newTags;
     // keep the in-memory graph fresh: cached note + link index (title may have changed)
     const cached = NOTES.find((x) => x.name === NOTE.name);
-    if (cached) { cached.title = newTitle; cached.body = newBody; cached.sha = NOTE.sha; }
+    if (cached) { cached.title = newTitle; cached.body = newBody; cached.date = newDate; cached.tags = newTags; cached.sha = NOTE.sha; }
     LINK_INDEX[NOTE.name.toLowerCase()] = NOTE.name;
     if (newTitle) LINK_INDEX[newTitle.toLowerCase()] = NOTE.name;
     titleEl.contentEditable = 'false';
     bodyEl.contentEditable = 'false';
+    if (propsEl) propsEl.innerHTML = propsView(NOTE);
     document.body.classList.remove('editing');
     setFab('edit');
   } catch (e) {
@@ -293,10 +494,16 @@ async function renderList() {
   app.innerHTML = `<section class="list">
     <div class="list-head">
       <h2>Notes</h2>
-      <input class="search" type="search" placeholder="Search notes…" aria-label="Search notes" autocomplete="off">
+      <div class="list-actions">
+        <button class="navbtn" id="newNote">+ New</button>
+        <button class="navbtn" id="dailyNote">📅 Today</button>
+      </div>
     </div>
+    <input class="search" type="search" placeholder="Search notes…" aria-label="Search notes" autocomplete="off">
     <div class="cards"></div>
   </section>`;
+  app.querySelector('#newNote').onclick = newNote;
+  app.querySelector('#dailyNote').onclick = openDaily;
 
   const cardsEl = app.querySelector('.cards');
   const searchEl = app.querySelector('.search');
@@ -331,10 +538,6 @@ async function renderNote(name) {
 
   NOTE = { name, path, sha: data.sha, title: n.title, date: n.date, tags: n.tags, body: n.body };
 
-  const chips = [];
-  if (n.date) chips.push(`<span class="chip"><span class="k">📅</span> ${esc(fmtDate(n.date))}</span>`);
-  (n.tags || []).forEach((t) => chips.push(`<span class="chip"><span class="k">🏷</span> ${esc(t)}</span>`));
-
   const backlinks = NOTES.filter((o) => o.name !== name && wikiTargets(o.body).some((t) => resolveLink(t) === name));
   const backlinksHtml = backlinks.length ? `
     <section class="backlinks">
@@ -344,13 +547,18 @@ async function renderNote(name) {
 
   app.innerHTML = `<article class="note">
     <h1 class="title">${esc(n.title) || name}</h1>
-    <div class="props">${chips.join('')}</div>
+    <div class="props">${propsView(NOTE)}</div>
     <div class="body">${marked.parse(n.body || '')}</div>
     ${backlinksHtml}
   </article>`;
 
+  const bodyEl = document.querySelector('.note .body');
+  bodyEl.addEventListener('input', onBodyInput);   // slash menu (only fires when editable)
+  bodyEl.addEventListener('keydown', onBodyKey);
+
   document.querySelector('.back').setAttribute('href', '#/');
   setFab('edit');
+  if (PENDING_EDIT) { PENDING_EDIT = false; enableEdit(); }
 }
 
 // ── Router ────────────────────────────────────────────────────────────────────
