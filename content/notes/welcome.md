@@ -20,6 +20,6 @@ repo — no lock-in, no subscription, no one reading over your shoulder.
 
 - Add **tags** to group notes.
 - Accents and emoji just work: *caffè, però, città* — 🎉🔥🍀
-- Installed this as an app? It opens straight into the editor.
+- Installed this as an app? It opens straight into your notes (the reading view).
 
 Now go fock around and find out. ✍️

@@ -3,7 +3,7 @@
   "short_name": "FockNote",
   "description": "Own your fockin' notes.",
   "id": "./",
-  "start_url": "./admin/",
+  "start_url": "./read/",
   "scope": "./",
   "display": "standalone",
   "orientation": "portrait-primary",
