@@ -55,11 +55,12 @@ main { max-width: var(--maxw); margin: 0 auto; padding: 2.5rem 1.25rem 6rem; }
   gap: 1rem; flex-wrap: wrap; margin: 0 0 1rem;
 }
 .search {
-  flex: 1 1 12rem; max-width: 20rem;
+  width: 100%; margin: 0 0 1rem; align-self: stretch;
   background: var(--bg-soft); color: var(--fg);
-  border: 1px solid var(--border); border-radius: 999px;
-  padding: .5rem .9rem; font: inherit; font-size: .9rem; outline: none;
+  border: 1px solid var(--border); border-radius: 10px;
+  padding: .55rem .9rem; font: inherit; font-size: .92rem; outline: none;
 }
+.search::placeholder { color: var(--fg-faint); }
 .search:focus { border-color: var(--accent); }
 .cards { display: flex; flex-direction: column; gap: .25rem; }
 .card {
