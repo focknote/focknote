@@ -85,14 +85,23 @@ and pasted content are edge cases. v1 will be good with rough edges.
 Markdown editor with live preview (split/toggle) instead of true WYSIWYG — much
 less round-trip risk, slightly less "in-place" feel.
 
-## Phase 3 — Extras (partial — 2026-06-16)
+## Phase 3 — Extras (SHIPPED — 2026-06-16)
 
-**Shipped** (`read/reader.js`, commit `e70cc14`): `[[wiki-links]]` (inline `marked`
-extension → in-app links, `.broken` for unresolved + a Turndown rule that round-trips
-them back to `[[..]]` on save), **backlinks** ("Linked from" on each note), and
-client-side **search** over title/tags/body (backed by a notes cache + name/title link
-index). **Still open:** callouts, daily notes, slash menu, inline date/tags editing,
-new-note creation from `/read/`.
+All shipped in `read/reader.js`, Edge-verified (Playwright), zero console errors:
+- **`[[wiki-links]]`** (`e70cc14`) — inline `marked` extension → in-app links,
+  `.broken` for unresolved, Turndown rule round-trips them back to `[[..]]`.
+- **Backlinks** (`e70cc14`) — "Linked from" on each note.
+- **Search** (`e70cc14`) — client-side over title/tags/body (notes cache + link index).
+- **Callouts** (`fa358fd`) — `marked` block extension for `> [!type]` blockquotes +
+  Turndown rule (round-trips to `[!type]` syntax), styled per type.
+- **Slash menu** (`fa358fd`) — type `/` in the editor: headings, lists, quote, code,
+  divider, callouts; arrow/enter/click + live filter.
+- **New note** (`+ New`) and **daily note** (`Today`) (`fa358fd`) — `createNote` PUTs a
+  fresh slugged `.md`, opens it in edit mode.
+- **Inline date + tags editing** (`fa358fd`) — date input + comma-list in the props row.
+
+Possible future polish: live `[[link]]` autocomplete in the editor, drag-reorder,
+image paste/upload, true offline reading.
 
 ## Dev / sync loop (Phase 2 prerequisite)
 
