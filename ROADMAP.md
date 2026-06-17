@@ -103,6 +103,20 @@ All shipped in `read/reader.js`, Edge-verified (Playwright), zero console errors
 Possible future polish: live `[[link]]` autocomplete in the editor, drag-reorder,
 image paste/upload, true offline reading.
 
+## Chat / GitHub write path
+
+The human-facing app work is shipped. The remaining integration question is how
+chat-originated writes should land in git without adding custom backend
+infrastructure. FockNote's shipped app path is straight commits through the
+GitHub Contents API; PRs are only an optional future chat-agent mode.
+
+- [x] Keep the app write path as direct commits.
+- [ ] Add a PR-vs-direct-commit switch only if/when a chat connector supports
+      chat-originated PRs cleanly.
+- [ ] Until then: capture + commit directly via Codex, Claude Code, or another
+      repo-aware coding agent.
+- [ ] Revisit Project-sync if chat needs standing read access to notes.
+
 ## Dev / sync loop (Phase 2 prerequisite)
 
 Phase 2 means many iterate → deploy → test cycles against a live instance.

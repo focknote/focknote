@@ -1,18 +1,18 @@
-# FockNote as a Model↔Human Interface
+# FockNote as a Model-Human Interface
 
 The companion to `ROADMAP.md`. The roadmap covers the **human UI** (reading +
 editing). This covers the bigger idea: FockNote as a **Notion replacement where
-the same Markdown is the shared workspace and memory for both you and Claude** —
-built entirely on top of GitHub's existing integrations, so there's nothing
-bespoke to install.
+the same Markdown is the shared workspace and memory for both you and repo-aware
+agents such as Codex and Claude Code** — built entirely on top of GitHub's
+existing integrations, so there's nothing bespoke to install.
 
 ## Thesis
 
 Notion is a proprietary store with an API you must wire up. FockNote's store is
-**a git repo**, and git/GitHub is *already* a first-class integration across the
-Claude ecosystem. So the model can read and write your notes through plumbing
-that already exists — no custom backend, no Worker, no OAuth app, no MCP server
-to stand up. Connect GitHub once and you're done. (For the nerdy Irish: own your
+**a git repo**, and git/GitHub is *already* a first-class integration across modern
+coding agents. So the model can read and write your notes through plumbing that
+already exists — no custom backend, no Worker, no OAuth app, no MCP server to
+stand up. Connect GitHub once and you're done. (For the nerdy Irish: own your
 fockin' notes *and* your fockin' memory.)
 
 ## The interaction model (Path A — git-native)
@@ -21,17 +21,19 @@ Markdown files in the notes repo are the single source of truth. Every surface
 reads or writes those same files; git history is the audit log.
 
 ### Read — everywhere, including chat
-- **claude.ai chat + GitHub connector** — point it at the notes repo and ask
-  Claude about your notes directly in a conversation. No export, no copy-paste.
-- **Web / PWA `/read/`** — the human-facing rendered view (Phase 1).
-- **Any Claude Code session** — reads files directly from a clone.
+- **Chat + GitHub connector** — point a supported chat surface at the notes repo
+  and ask about your notes directly in a conversation. No export, no copy-paste.
+- **Web / PWA `/read/`** — the main human-facing read + edit-in-place app.
+- **Codex, Claude Code, or any repo-aware coding agent** — reads files directly
+  from a clone.
 
-### Write — from any Claude surface, or by hand
-- **Local Claude Code** — edit `.md`, commit.
-- **Remote / web Claude Code (cloud)** — same, from anywhere.
-- **"Cowork" / Claude-in-browser coding** — commits via GitHub.
-- **Sveltia `/admin/`** and the future **in-place editor** (Phase 2) — direct
-  human editing.
+### Write — from any agent surface, or by hand
+- **Local Codex or Claude Code** — edit `.md`, commit.
+- **Remote / web coding agents** — same, from anywhere.
+- **Chat-originated agent work** — direct commits today through repo-aware coding
+  agents; PRs later if a chat surface exposes that mode.
+- **FockNote `/read/`** — the main human read + edit-in-place app.
+- **Sveltia `/admin/`** — power-admin fallback for list, bulk, and media workflows.
 
 All of these land the same `.md` with the same frontmatter, so they coexist
 (see `ROADMAP.md` → "Sveltia is not removed").
@@ -46,13 +48,14 @@ The notebook doubles as project memory, curated like Notion pages but in git:
 
 What you avoid vs a typical Notion-style integration: a custom API backend, a
 Cloudflare Worker, an OAuth app, a hosted MCP server. What you still do **once**:
-connect GitHub to Claude and grant access to the (possibly private) notes repo.
-That's the whole setup.
+connect GitHub to the agent surface and grant access to the (possibly private)
+notes repo. That's the whole setup.
 
 Honest limits to design around:
-- **claude.ai's GitHub connector is read-only.** Chat can *read* notes; *writing*
-  goes through Claude Code (local/web) or the web editors. The split "read in
-  chat, write from code" is intentional and fine.
+- **Some chat GitHub connectors are read-only today.** Chat can *read* notes;
+  *writing* goes through Codex, Claude Code, another repo-aware coding surface,
+  or the web editors. FockNote saves are direct commits today; PRs are an
+  optional future mode for chat-originated changes, not the current app path.
 - **Private notes repo** needs the connector/token to have access — the one
   permission step.
 - **Token-efficient recall** matters: with many notes the model shouldn't slurp
@@ -67,22 +70,23 @@ Honest limits to design around:
 - **`[[wiki-links]]`** — a backlink graph (Phase 3) the model can traverse.
 - **A dedicated collection** (e.g. `content/agent/` or `memory/`) for
   model-maintained notes, kept distinct from human notes but visible to both.
-- **Provenance via git identity** — human commits and Claude's commits use
-  distinct identities (the dual-identity rig in `ROADMAP.md`), so the history
-  shows who wrote what.
+- **Provenance via git identity** — human commits and agent commits use distinct
+  identities or subject prefixes, so the history shows who wrote what.
 
 ## Add it to a repo you already have
 
 You don't need a whole notebook to get the memory half. Any existing repo — a
 coding project, a docs repo — can adopt the bridge: drop in a `content/agent/`
-folder (where Claude keeps the **best of your sessions**: decisions, context,
-reference notes) and wire it into `CLAUDE.md`. Now Claude carries that memory every
-session, and because it's just Markdown in git it's **shareable** — push it and a
-friend who clones the repo gets the same curated brain, diffable and reversible.
+folder (where the agent keeps the **best of your sessions**: decisions, context,
+reference notes) and wire it into agent guidance such as `CLAUDE.md` or a Codex
+skill. Now the agent carries that memory every session, and because it's just
+Markdown in git it's **shareable** — push it and a friend who clones the repo gets
+the same curated brain, diffable and reversible.
 
 Two files do it: `content/agent/MEMORY.md` (the conventions) + `content/agent/INDEX.md`
-(the index). The third, root `CLAUDE.md`, is deliberately a thin block that only
-*imports* the conventions:
+(the index). For Claude, root `CLAUDE.md` is deliberately a thin block that only
+*imports* the conventions; for Codex, `.agents/skills/focknote/SKILL.md` carries
+the same workflow:
 
 ```markdown
 <!-- focknote:memory:start -->
@@ -93,25 +97,29 @@ Two files do it: `content/agent/MEMORY.md` (the conventions) + `content/agent/IN
 **It won't fight your existing setup.** If the repo already has a `CLAUDE.md` full
 of coding instructions, the bridge **appends** this marker block — it never
 overwrites. Your build/style rules stay; memory layers on top. Remove it any time by
-deleting the block + the `content/agent/` folder. (The skill automates this append
-safely — see `SKILL.md` → "Add the memory bridge to an existing repo".)
+deleting the block + the `content/agent/` folder. A Codex skill can live beside
+that bridge without changing Claude-specific setup.
 
-## Optional bridge to Claude Code's built-in memory
+## Optional bridge to tool-specific memory
 
-Claude Code's own project memory lives at a fixed hidden path the harness loads
-each session; it can't simply be redirected into this repo. To unify, two
-lightweight options (neither is automatic):
-- A `CLAUDE.md`/hook instruction telling Claude to treat the notebook's
+Some tools have their own project memory or instruction stores that cannot simply
+be redirected into this repo. To unify, two lightweight options (neither is
+automatic):
+- A tool-specific instruction telling the agent to treat the notebook's
   `agent/`/`memory/` collection as authoritative when working in the repo.
 - A small sync that mirrors the hidden memory into the notebook (so it becomes
   human-visible notes) and back.
 
 ## Build order
 
-1. Path A works **today** with no new code — start using the repo as the shared
-   store and codify the conventions above.
-2. Phase 1 `/read/` gives the human read view (built).
-3. Phase 2 in-place editor — and it should write notes that honor these
-   conventions (frontmatter `type`, links).
-4. Later: a FockNote MCP (Path B) to add *write* from chat and other non-Code
-   surfaces; the memory bridge (Path C) as a convention/hook.
+1. Path A works **today** with no new code — use the repo as the shared store and
+   keep the conventions above in the notes themselves.
+2. Phase 1 `/read/` gives the human read view (shipped).
+3. Phase 2 in-place editor writes the same Markdown/frontmatter as Sveltia
+   (shipped).
+4. Phase 3 links, backlinks, search, callouts, slash menu, new notes, daily
+   notes, and inline date/tags are shipped.
+5. Later: expose chat-side PRs as an optional mode once GitHub connectors support
+   them; until then, capture + commit directly via Codex, Claude Code, or another
+   repo-aware coding agent. Revisit Project-sync only if chat needs standing read
+   access to notes.
