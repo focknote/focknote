@@ -289,9 +289,9 @@ async function openDaily() {
 // ── Props (date + tags), view + inline edit ────────────────────────────────────
 function propsView(n) {
   const chips = [];
-  if (n.type) chips.push(`<span class="chip chip-type"><span class="k">▣</span> ${esc(n.type)}</span>`);
+  if (n.type) chips.push(`<a class="chip chip-type" href="${hashFor(null, n.type)}"><span class="k">▣</span> ${esc(n.type)}</a>`);
   if (n.date) chips.push(`<span class="chip"><span class="k">📅</span> ${esc(fmtDate(n.date))}</span>`);
-  (n.tags || []).forEach((t) => chips.push(`<span class="chip"><span class="k">🏷</span> ${esc(t)}</span>`));
+  (n.tags || []).forEach((t) => chips.push(`<a class="chip chip-tag" href="${hashFor(t, null)}"><span class="k">🏷</span> ${esc(t)}</a>`));
   return chips.join('');
 }
 function propsEdit(n) {
@@ -504,8 +504,17 @@ async function saveNote() {
   }
 }
 
+// Build a list-route hash for a given tag/type filter combo (either may be null).
+function hashFor(tag, type) {
+  const p = new URLSearchParams();
+  if (tag) p.set('tag', tag);
+  if (type) p.set('type', type);
+  const s = p.toString();
+  return s ? `#/?${s}` : '#/';
+}
+
 // ── Views ─────────────────────────────────────────────────────────────────────
-async function renderList() {
+async function renderList(activeTag, activeType) {
   showState('Loading notes…');
   clearFabs();
   NOTE = null;
@@ -515,6 +524,9 @@ async function renderList() {
     showState('No notes yet. Create one in the CMS, then come back.', false);
     return;
   }
+  const pills = [];
+  if (activeTag) pills.push(`<a class="active-filter" href="${hashFor(null, activeType)}">🏷 ${esc(activeTag)} <span class="x">✕</span></a>`);
+  if (activeType) pills.push(`<a class="active-filter" href="${hashFor(activeTag, null)}">▣ ${esc(activeType)} <span class="x">✕</span></a>`);
   app.innerHTML = `<section class="list">
     <div class="list-head">
       <h2>Notes</h2>
@@ -524,6 +536,7 @@ async function renderList() {
       </div>
     </div>
     <input class="search" type="search" placeholder="Search notes…" aria-label="Search notes" autocomplete="off">
+    <div class="filter-row">${pills.join('')}</div>
     <div class="cards"></div>
   </section>`;
   app.querySelector('#newNote').onclick = newNote;
@@ -533,7 +546,10 @@ async function renderList() {
   const searchEl = app.querySelector('.search');
   const draw = (q) => {
     const query = (q || '').trim().toLowerCase();
-    const hits = !query ? NOTES : NOTES.filter((n) =>
+    let pool = NOTES.filter((n) =>
+      (!activeTag || (n.tags || []).includes(activeTag)) &&
+      (!activeType || n.type === activeType));
+    const hits = !query ? pool : pool.filter((n) =>
       (n.title || '').toLowerCase().includes(query) ||
       (n.tags || []).join(' ').toLowerCase().includes(query) ||
       (n.body || '').toLowerCase().includes(query));
@@ -541,12 +557,29 @@ async function renderList() {
       ? hits.map((n) => `
         <a class="card" href="#/note/${encodeURIComponent(n.name)}">
           <div class="t">${esc(n.title) || n.name}</div>
-          <div class="m">${[n.type, fmtDate(n.updated || n.date), (n.tags || []).join(' · ')].filter(Boolean).join('  —  ')}</div>
+          <div class="m">
+            ${n.type ? `<span class="type-chip" data-type="${esc(n.type)}">${esc(n.type)}</span>` : ''}
+            ${fmtDate(n.updated || n.date)}
+          </div>
+          ${(n.tags || []).length ? `<div class="tags">${(n.tags || []).map((t) => `<span class="tag-chip" data-tag="${esc(t)}">#${esc(t)}</span>`).join('')}</div>` : ''}
         </a>`).join('')
-      : `<div class="state">No notes match “${esc(query)}”.</div>`;
+      : `<div class="state">No notes match “${esc(query)}”${activeTag ? ` in #${esc(activeTag)}` : ''}${activeType ? ` (${esc(activeType)})` : ''}.</div>`;
   };
   draw('');
   searchEl.addEventListener('input', () => draw(searchEl.value));
+  cardsEl.addEventListener('click', (e) => {
+    const tagChip = e.target.closest('.tag-chip');
+    const typeChip = e.target.closest('.type-chip');
+    if (tagChip) {
+      e.preventDefault(); e.stopPropagation();
+      const t = tagChip.dataset.tag;
+      location.hash = hashFor(activeTag === t ? null : t, activeType);
+    } else if (typeChip) {
+      e.preventDefault(); e.stopPropagation();
+      const ty = typeChip.dataset.type;
+      location.hash = hashFor(activeTag, activeType === ty ? null : ty);
+    }
+  });
 }
 
 async function renderNote(name) {
@@ -598,9 +631,10 @@ async function route() {
   if (!TOKEN) { askToken(); return; }
 
   const hash = location.hash.replace(/^#\/?/, '');
+  const [path, qs = ''] = hash.split('?');
   try {
-    if (hash.startsWith('note/')) await renderNote(decodeURIComponent(hash.slice(5)));
-    else await renderList();
+    if (path.startsWith('note/')) await renderNote(decodeURIComponent(path.slice(5)));
+    else { const p = new URLSearchParams(qs); await renderList(p.get('tag'), p.get('type')); }
   } catch (e) {
     if (e.code === 401) { askToken(); return; }
     if (e.code === 404) { showState('Notes not found. Check the repo/branch in config, and that your token can read it.', true); return; }
