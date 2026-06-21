@@ -68,7 +68,7 @@ Honest limits to design around:
 - **Frontmatter** — `title`, `date`, `tags`; add `type` (e.g. `project`,
   `reference`, `decision`, `log`) so notes are retrievable by kind.
 - **`[[wiki-links]]`** — a backlink graph (Phase 3) the model can traverse.
-- **A dedicated collection** (e.g. `content/agent/` or `memory/`) for
+- **A dedicated collection** (e.g. `knowledge/reference/` or `memory/`) for
   model-maintained notes, kept distinct from human notes but visible to both.
 - **Provenance via git identity** — human commits and agent commits use distinct
   identities or subject prefixes, so the history shows who wrote what.
@@ -76,28 +76,28 @@ Honest limits to design around:
 ## Add it to a repo you already have
 
 You don't need a whole notebook to get the memory half. Any existing repo — a
-coding project, a docs repo — can adopt the bridge: drop in a `content/agent/`
+coding project, a docs repo — can adopt the bridge: drop in a `knowledge/reference/`
 folder (where the agent keeps the **best of your sessions**: decisions, context,
 reference notes) and wire it into agent guidance such as `CLAUDE.md` or a Codex
 skill. Now the agent carries that memory every session, and because it's just
 Markdown in git it's **shareable** — push it and a friend who clones the repo gets
 the same curated brain, diffable and reversible.
 
-Two files do it: `content/agent/MEMORY.md` (the conventions) + `content/agent/INDEX.md`
+Two files do it: `knowledge/reference/MEMORY.md` (the conventions) + `knowledge/reference/INDEX.md`
 (the index). For Claude, root `CLAUDE.md` is deliberately a thin block that only
 *imports* the conventions; for Codex, `.agents/skills/focknote/SKILL.md` carries
 the same workflow:
 
 ```markdown
 <!-- focknote:memory:start -->
-@content/agent/MEMORY.md
+@knowledge/reference/MEMORY.md
 <!-- focknote:memory:end -->
 ```
 
 **It won't fight your existing setup.** If the repo already has a `CLAUDE.md` full
 of coding instructions, the bridge **appends** this marker block — it never
 overwrites. Your build/style rules stay; memory layers on top. Remove it any time by
-deleting the block + the `content/agent/` folder. A Codex skill can live beside
+deleting the block + the `knowledge/reference/` folder. A Codex skill can live beside
 that bridge without changing Claude-specific setup.
 
 ## Optional bridge to tool-specific memory

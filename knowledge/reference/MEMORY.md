@@ -9,38 +9,46 @@ tags:
 
 # FockNote memory — how Claude uses this folder
 
-`content/agent/` is **model-maintained memory**, kept distinct from human notes but
+`knowledge/` is a single OKF-style tree (Google's [Open Knowledge Format](https://cloud.google.com/blog/products/data-analytics/how-the-open-knowledge-format-can-improve-data-sharing) v0.1):
+markdown + YAML frontmatter, one concept per file, every file carries a mandatory
+`type:`. Human notes and Claude's memory share the tree, split by type folder —
 visible to both (humans edit the same files in the `/admin/` CMS). Git history is
 the audit log. Treat it as authoritative.
 
 ## Where memory lives
 
-- `content/agent/` — your memory. Read and write here.
-- `content/agent/INDEX.md` — the **index note**: one line per important memory.
-  Read this *first* to orient. Don't slurp everything — follow the index, then open
-  only the notes you need.
-- `content/notes/` — human notes. Read for context; don't overwrite unless asked.
+- `knowledge/reference/`, `knowledge/project/`, `knowledge/decision/`,
+  `knowledge/log/` — your memory, one folder per `type`. Read and write here.
+- `knowledge/reference/INDEX.md` — the **index note**: one line per important
+  memory. Read this *first* to orient. Don't slurp everything — follow the index,
+  then open only the notes you need.
+- `knowledge/note/` — human notes. Read for context; don't overwrite unless asked.
+- `index.md` and `log.md` are OKF-reserved filenames: `index.md` is a folder
+  overview (progressive disclosure), `log.md` a chronological change log. Plain
+  markdown, no special tooling required.
 
 ## Reading
 
-1. Open `content/agent/INDEX.md`.
+1. Open `knowledge/reference/INDEX.md`.
 2. Follow its lines (and any `[[wiki-links]]`) to the specific notes you need.
-3. Only then read human notes in `content/notes/` if more context is required.
+3. Only then read human notes in `knowledge/note/` if more context is required.
 
 ## Writing memory
 
-When you learn something worth persisting, write a note in `content/agent/`:
+When you learn something worth persisting, write a note in the matching
+`knowledge/<type>/` folder:
 
 - **Frontmatter** every note: `title`, `date` (ISO), `tags`, and `type` — one of
-  `project`, `reference`, `decision`, `log`. `type` makes notes retrievable by kind.
+  `note`, `project`, `reference`, `decision`, `log`. `type` also picks the folder.
 - **One fact / topic per note.** Keep them small so recall stays cheap.
-- **Link** related notes with `[[note-slug]]` (filename without `.md`).
+- **Link** related notes with `[[note-slug]]` (filename without `.md`, unique
+  across the whole `knowledge/` tree).
 - **Update `INDEX.md`**: add/refresh a one-line pointer `- [[note-slug]] — short hook`.
   Never put note bodies in the index.
 - Before creating, check `INDEX.md` for an existing note that covers it — update that
   note instead of duplicating. Delete notes that turn out wrong.
 
-Example note `content/agent/db-choice.md`:
+Example note `knowledge/decision/db-choice.md`:
 
 ```markdown
 ---

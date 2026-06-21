@@ -147,10 +147,11 @@ function encodeB64(str) {
 // ── Frontmatter ───────────────────────────────────────────────────────────────
 function parseNote(raw) {
   const m = raw.match(/^---\n([\s\S]*?)\n---\n?([\s\S]*)$/);
-  if (!m) return { title: '', date: '', tags: [], body: raw };
+  if (!m) return { title: '', date: '', type: '', tags: [], body: raw };
   const fm = m[1], body = m[2];
   const title = (fm.match(/^title:\s*(.+)$/m) || [])[1]?.trim().replace(/^["']|["']$/g, '') || '';
   const date = (fm.match(/^date:\s*(.+)$/m) || [])[1]?.trim().replace(/^["']|["']$/g, '') || '';
+  const type = (fm.match(/^type:\s*(.+)$/m) || [])[1]?.trim().replace(/^["']|["']$/g, '') || '';
   let tags = [];
   const inline = fm.match(/^tags:\s*\[(.*)\]\s*$/m);
   if (inline) {
@@ -159,12 +160,12 @@ function parseNote(raw) {
     const block = fm.match(/^tags:\s*\n((?:\s*-\s*.+\n?)+)/m);
     if (block) tags = block[1].split('\n').map((l) => (l.match(/-\s*(.+)/) || [])[1]?.trim().replace(/^["']|["']$/g, '')).filter(Boolean);
   }
-  return { title, date, tags, body };
+  return { title, date, type, tags, body };
 }
 
-function buildFm({ title, date, tags }) {
+function buildFm({ title, date, type, tags }) {
   const tagStr = tags.length ? `\n${tags.map((t) => `  - ${t}`).join('\n')}` : ' []';
-  return `---\ntitle: "${title.replace(/"/g, '\\"')}"\ndate: "${date}"\ntags:${tagStr}\n---\n`;
+  return `---\ntitle: "${title.replace(/"/g, '\\"')}"\ndate: "${date}"\ntype: "${type}"\ntags:${tagStr}\n---\n`;
 }
 
 function fmtDate(d) {
@@ -191,18 +192,39 @@ function wikiTargets(body) {
   while ((m = re.exec(body || ''))) out.push(m[1].trim());
   return out;
 }
+// One folder per OKF `type`, all under knowledge/. A note's `name` is its path
+// relative to knowledge/ (no extension) — not just the filename — so the
+// OKF-reserved `index.md`/`log.md` names can exist once per folder without colliding.
+const TYPES = ['note', 'project', 'reference', 'decision', 'log'];
+
 async function loadAllNotes() {
-  const items = await gh(`/repos/${CFG.repo}/contents/content/notes?ref=${CFG.branch}`, TOKEN);
-  const files = items.filter((f) => f.type === 'file' && f.name.endsWith('.md'));
-  NOTES = await Promise.all(files.map(async (f) => {
-    const data = await gh(`/repos/${CFG.repo}/contents/${f.path}?ref=${CFG.branch}`, TOKEN);
-    return { name: f.name.replace(/\.md$/, ''), sha: data.sha, ...parseNote(decodeB64(data.content)) };
+  const perFolder = await Promise.all(TYPES.map(async (type) => {
+    let items;
+    try { items = await gh(`/repos/${CFG.repo}/contents/knowledge/${type}?ref=${CFG.branch}`, TOKEN); }
+    catch (e) { if (e.code === 404) return []; throw e; }
+    return items.filter((f) => f.type === 'file' && f.name.endsWith('.md')).map((f) => ({ ...f, fmType: type }));
   }));
-  NOTES.sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));
+  const files = perFolder.flat();
+  NOTES = await Promise.all(files.map(async (f) => {
+    const [data, commits] = await Promise.all([
+      gh(`/repos/${CFG.repo}/contents/${f.path}?ref=${CFG.branch}`, TOKEN),
+      gh(`/repos/${CFG.repo}/commits?path=${encodeURIComponent(f.path)}&sha=${CFG.branch}&per_page=1`, TOKEN).catch(() => []),
+    ]);
+    const updated = commits[0]?.commit?.committer?.date || null;
+    const name = `${f.fmType}/${f.name.replace(/\.md$/, '')}`;
+    return { name, path: f.path, sha: data.sha, updated, ...parseNote(decodeB64(data.content)) };
+  }));
+  // True last-git-change wins over the frontmatter date (which is often an event
+  // date set once and never touched again).
+  NOTES.sort((a, b) => new Date(b.updated || b.date || 0) - new Date(a.updated || a.date || 0));
   LINK_INDEX = {};
   for (const n of NOTES) {
     LINK_INDEX[n.name.toLowerCase()] = n.name;
     if (n.title) LINK_INDEX[n.title.toLowerCase()] = n.name;
+    // Back-compat: [[welcome]] still resolves if "welcome" is unambiguous across
+    // folders — full-path or title links always win when there's a clash.
+    const bare = n.name.slice(n.name.indexOf('/') + 1).toLowerCase();
+    if (!(bare in LINK_INDEX)) LINK_INDEX[bare] = n.name;
   }
   return NOTES;
 }
@@ -219,19 +241,20 @@ const slugify = (s) => (s || '').toLowerCase().trim()
 const todayISO = () => new Date().toISOString();
 const datePart = (iso) => (iso ? String(iso).slice(0, 10) : '');
 
-async function createNote({ title, date, tags = [], body = '' }) {
+async function createNote({ title, date, type = 'note', tags = [], body = '' }) {
   const d = date || todayISO();
   const base = `${datePart(d)}-${slugify(title) || 'untitled'}`;
-  let name = base, i = 2;
-  while (NOTES.some((x) => x.name === name)) name = `${base}-${i++}`;
-  const path = `content/notes/${name}.md`;
-  const raw = buildFm({ title, date: d, tags }) + body + '\n';
+  let file = base, i = 2, name = `${type}/${file}`;
+  while (NOTES.some((x) => x.name === name)) { file = `${base}-${i++}`; name = `${type}/${file}`; }
+  const path = `knowledge/${name}.md`;
+  const raw = buildFm({ title, date: d, type, tags }) + body + '\n';
   const result = await ghPut(`/repos/${CFG.repo}/contents/${path}`, TOKEN,
     { message: `create: ${title}`, content: encodeB64(raw), branch: CFG.branch });
-  const note = { name, sha: result.content.sha, title, date: d, tags, body };
+  const note = { name, path, sha: result.content.sha, updated: d, title, date: d, type, tags, body };
   NOTES.unshift(note);
   LINK_INDEX[name.toLowerCase()] = name;
   if (title) LINK_INDEX[title.toLowerCase()] = name;
+  if (!(file.toLowerCase() in LINK_INDEX)) LINK_INDEX[file.toLowerCase()] = name;
   return name;
 }
 
@@ -266,6 +289,7 @@ async function openDaily() {
 // ── Props (date + tags), view + inline edit ────────────────────────────────────
 function propsView(n) {
   const chips = [];
+  if (n.type) chips.push(`<span class="chip chip-type"><span class="k">▣</span> ${esc(n.type)}</span>`);
   if (n.date) chips.push(`<span class="chip"><span class="k">📅</span> ${esc(fmtDate(n.date))}</span>`);
   (n.tags || []).forEach((t) => chips.push(`<span class="chip"><span class="k">🏷</span> ${esc(t)}</span>`));
   return chips.join('');
@@ -446,7 +470,7 @@ async function saveNote() {
   const tagsEl = propsEl?.querySelector('.prop-tags');
   const newDate = dateEl ? (dateEl.value ? dateEl.value + 'T00:00:00.000Z' : '') : NOTE.date;
   const newTags = tagsEl ? tagsEl.value.split(',').map((s) => s.trim()).filter(Boolean) : NOTE.tags;
-  const raw = buildFm({ title: newTitle, date: newDate, tags: newTags }) + newBody + '\n';
+  const raw = buildFm({ title: newTitle, date: newDate, type: NOTE.type, tags: newTags }) + newBody + '\n';
 
   try {
     const result = await ghPut(
@@ -517,7 +541,7 @@ async function renderList() {
       ? hits.map((n) => `
         <a class="card" href="#/note/${encodeURIComponent(n.name)}">
           <div class="t">${esc(n.title) || n.name}</div>
-          <div class="m">${[fmtDate(n.date), (n.tags || []).join(' · ')].filter(Boolean).join('  —  ')}</div>
+          <div class="m">${[n.type, fmtDate(n.updated || n.date), (n.tags || []).join(' · ')].filter(Boolean).join('  —  ')}</div>
         </a>`).join('')
       : `<div class="state">No notes match “${esc(query)}”.</div>`;
   };
@@ -529,14 +553,14 @@ async function renderNote(name) {
   showState('Loading…');
   clearFabs();
   document.body.classList.remove('editing');
-  const path = `content/notes/${name}.md`;
+  const path = `knowledge/${name}.md`;
   const [data] = await Promise.all([
     gh(`/repos/${CFG.repo}/contents/${path}?ref=${CFG.branch}`, TOKEN),
     ensureNotes(), // cache + link index, so [[links]] resolve and backlinks compute
   ]);
   const n = parseNote(decodeB64(data.content));
 
-  NOTE = { name, path, sha: data.sha, title: n.title, date: n.date, tags: n.tags, body: n.body };
+  NOTE = { name, path, sha: data.sha, title: n.title, date: n.date, type: n.type, tags: n.tags, body: n.body };
 
   const backlinks = NOTES.filter((o) => o.name !== name && wikiTargets(o.body).some((t) => resolveLink(t) === name));
   const backlinksHtml = backlinks.length ? `

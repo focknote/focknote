@@ -20,11 +20,14 @@ public_folder: /content/media
 
 # Accented characters (à, è, ò…) and emoji are stored as UTF-8 by Sveltia — no config needed.
 
+# Five collections, one per OKF `type` — all live under knowledge/<type>/.
+# `type` is hidden + defaulted per collection so every file is OKF-conformant
+# (single mandatory field) without the user having to set it by hand.
 collections:
-  - name: notes
+  - name: note
     label: Notes
     label_singular: Note
-    folder: content/notes
+    folder: knowledge/note
     create: true
     delete: true
     format: frontmatter
@@ -33,6 +36,79 @@ collections:
     sortable_fields: [date, title]
     summary: "{{title}}"
     fields:
+      - { name: type,  label: Type,  widget: hidden, default: note }
+      - { name: title, label: Title, widget: string }
+      - { name: date,  label: Date,  widget: datetime, default: "" }
+      - { name: tags,  label: Tags,  widget: list, required: false }
+      - { name: body,  label: Body,  widget: markdown }
+
+  - name: project
+    label: Projects
+    label_singular: Project
+    folder: knowledge/project
+    create: true
+    delete: true
+    format: frontmatter
+    extension: md
+    slug: "{{slug}}"
+    sortable_fields: [date, title]
+    summary: "{{title}}"
+    fields:
+      - { name: type,  label: Type,  widget: hidden, default: project }
+      - { name: title, label: Title, widget: string }
+      - { name: date,  label: Date,  widget: datetime, default: "" }
+      - { name: tags,  label: Tags,  widget: list, required: false }
+      - { name: body,  label: Body,  widget: markdown }
+
+  - name: reference
+    label: Reference
+    label_singular: Reference
+    folder: knowledge/reference
+    create: true
+    delete: true
+    format: frontmatter
+    extension: md
+    slug: "{{slug}}"
+    sortable_fields: [date, title]
+    summary: "{{title}}"
+    fields:
+      - { name: type,  label: Type,  widget: hidden, default: reference }
+      - { name: title, label: Title, widget: string }
+      - { name: date,  label: Date,  widget: datetime, default: "" }
+      - { name: tags,  label: Tags,  widget: list, required: false }
+      - { name: body,  label: Body,  widget: markdown }
+
+  - name: decision
+    label: Decisions
+    label_singular: Decision
+    folder: knowledge/decision
+    create: true
+    delete: true
+    format: frontmatter
+    extension: md
+    slug: "{{slug}}"
+    sortable_fields: [date, title]
+    summary: "{{title}}"
+    fields:
+      - { name: type,  label: Type,  widget: hidden, default: decision }
+      - { name: title, label: Title, widget: string }
+      - { name: date,  label: Date,  widget: datetime, default: "" }
+      - { name: tags,  label: Tags,  widget: list, required: false }
+      - { name: body,  label: Body,  widget: markdown }
+
+  - name: log
+    label: Logs
+    label_singular: Log
+    folder: knowledge/log
+    create: true
+    delete: true
+    format: frontmatter
+    extension: md
+    slug: "{{slug}}"
+    sortable_fields: [date, title]
+    summary: "{{title}}"
+    fields:
+      - { name: type,  label: Type,  widget: hidden, default: log }
       - { name: title, label: Title, widget: string }
       - { name: date,  label: Date,  widget: datetime, default: "" }
       - { name: tags,  label: Tags,  widget: list, required: false }

@@ -1,6 +1,7 @@
 ---
 title: Welcome to FockNote
 date: 2026-06-12T00:00:00.000Z
+type: note
 tags:
   - meta
 ---

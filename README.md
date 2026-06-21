@@ -10,7 +10,7 @@ is the whole backend. GitHub Pages hosts the app shell. No server, no subscripti
 lock-in.
 
 > 🧠 **Notes as a shared brain.** Point Codex, Claude Code, or any repo-aware agent at the
-> repo and it reads your notes directly; drop in the memory bridge (`content/agent/` plus
+> repo and it reads your notes directly; drop in the memory bridge (`knowledge/reference/` plus
 > agent guidance such as `CLAUDE.md` or a Codex skill) and the agent curates the *best of
 > your sessions* back as commits — visible, diffable, yours. See [`INTERFACE.md`](INTERFACE.md).
 
@@ -45,9 +45,10 @@ manifest.json         PWA manifest (name, icons, standalone)
 sw.js                 offline cache for the app shell + editor
 read/                 main read + edit-in-place app with vendored Markdown libs
 admin/                Sveltia power-admin fallback + pinned bundle
-content/              your notes (Markdown) + media; content/agent/ = agent memory
+knowledge/            your notes (OKF-style, one folder per type: note/project/reference/decision/log)
+content/media/        attachments
 assets/icons/         app icons
-CLAUDE.md             Claude memory bridge — points Claude at content/agent/
+CLAUDE.md             Claude memory bridge — points Claude at knowledge/reference/
 .agents/skills/       Codex skill — teaches Codex the FockNote workflow
 VENDOR.md             pinned Sveltia version + how to update
 ```
