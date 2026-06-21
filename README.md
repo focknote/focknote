@@ -39,13 +39,17 @@ Details, token scopes, and the privacy guarantee: **https://focknote.github.io**
 
 ## What's in here
 
+`knowledge/` follows Google's [Open Knowledge Format](knowledge/reference/MEMORY.md) (OKF) —
+plain Markdown + YAML frontmatter, one mandatory `type` field per file, split
+into per-type folders.
+
 ```
 index.html            landing + service-worker registration + install button
 manifest.json         PWA manifest (name, icons, standalone)
 sw.js                 offline cache for the app shell + editor
 read/                 main read + edit-in-place app with vendored Markdown libs
 admin/                Sveltia power-admin fallback + pinned bundle
-knowledge/            your notes (OKF-style, one folder per type: note/project/reference/decision/log)
+knowledge/            your notes, one folder per type: note/project/reference/decision/log
 content/media/        attachments
 assets/icons/         app icons
 CLAUDE.md             Claude memory bridge — points Claude at knowledge/reference/
