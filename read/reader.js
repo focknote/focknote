@@ -60,6 +60,27 @@ marked.use({ extensions: [{
   },
 }] });
 
+// ── Relative .md links ──────────────────────────────────────────────────────────
+// Notes may cross-reference each other with plain Markdown links like
+// [db choice](db-choice.md) or [foo](decision/foo.md), not just [[wikilinks]]. The
+// default renderer leaves the href as a relative path, which the browser resolves
+// against /read/ (a hash router) and 404s. Resolve the bare filename against the note
+// index instead; fall through to a normal link for anything that isn't a relative .md
+// reference (http(s), mailto, anchors, etc).
+marked.use({ renderer: {
+  link(href, title, text) {
+    if (!/^[^:#]+\.md(#.*)?$/i.test(href || '')) {
+      return `<a href="${esc(href)}"${title ? ` title="${esc(title)}"` : ''} target="_blank" rel="noopener">${text}</a>`;
+    }
+    const base = href.split('#')[0].split('/').pop().replace(/\.md$/i, '');
+    const name = resolveLink(base);
+    const cls = name ? 'wikilink' : 'wikilink broken';
+    const linkHref = name ? `#/note/${encodeURIComponent(name)}` : '#/';
+    const tip = name ? '' : ` title="No note named ${esc(base)}"`;
+    return `<a class="${cls}" href="${linkHref}" data-wikitarget="${esc(base)}"${tip}>${text}</a>`;
+  },
+} });
+
 // Turndown: callout <div> → `> [!type] title` + quoted body (round-trip safe).
 td.addRule('callout', {
   filter: (node) => node.nodeType === 1 && node.classList && node.classList.contains('callout'),
@@ -147,7 +168,7 @@ function encodeB64(str) {
 // ── Frontmatter ───────────────────────────────────────────────────────────────
 function parseNote(raw) {
   const m = raw.match(/^---\n([\s\S]*?)\n---\n?([\s\S]*)$/);
-  if (!m) return { title: '', date: '', type: '', tags: [], body: raw };
+  if (!m) return { fmRaw: '', title: '', date: '', type: '', tags: [], body: raw };
   const fm = m[1], body = m[2];
   const title = (fm.match(/^title:\s*(.+)$/m) || [])[1]?.trim().replace(/^["']|["']$/g, '') || '';
   const date = (fm.match(/^date:\s*(.+)$/m) || [])[1]?.trim().replace(/^["']|["']$/g, '') || '';
@@ -160,12 +181,29 @@ function parseNote(raw) {
     const block = fm.match(/^tags:\s*\n((?:\s*-\s*.+\n?)+)/m);
     if (block) tags = block[1].split('\n').map((l) => (l.match(/-\s*(.+)/) || [])[1]?.trim().replace(/^["']|["']$/g, '')).filter(Boolean);
   }
-  return { title, date, type, tags, body };
+  return { fmRaw: fm, title, date, type, tags, body };
 }
 
+// New note from scratch — canonical FockNote frontmatter (title/date/type/tags).
 function buildFm({ title, date, type, tags }) {
   const tagStr = tags.length ? `\n${tags.map((t) => `  - ${t}`).join('\n')}` : ' []';
   return `---\ntitle: "${title.replace(/"/g, '\\"')}"\ndate: "${date}"\ntype: "${type}"\ntags:${tagStr}\n---\n`;
+}
+
+// Editing an existing note: patch only the title/date/tags lines inside the ORIGINAL
+// frontmatter block, leaving every other field (type, plus anything a human added in the
+// CMS — status, author, …) byte-for-byte intact. buildFm would silently drop them.
+function patchFm(fmRaw, { title, date, tags }) {
+  let fm = fmRaw;
+  const titleLine = `title: "${title.replace(/"/g, '\\"')}"`;
+  fm = /^title:.*$/m.test(fm) ? fm.replace(/^title:.*$/m, titleLine) : `${titleLine}\n${fm}`;
+  const dateLine = `date: "${date}"`;
+  fm = /^date:.*$/m.test(fm) ? fm.replace(/^date:.*$/m, dateLine) : `${fm}\n${dateLine}`;
+  const tagsLine = `tags: [${tags.join(', ')}]`;
+  if (/^tags:\s*\n(?:\s*-\s*.+\n?)+/m.test(fm)) fm = fm.replace(/^tags:\s*\n(?:\s*-\s*.+\n?)+/m, `${tagsLine}\n`);
+  else if (/^tags:.*$/m.test(fm)) fm = fm.replace(/^tags:.*$/m, tagsLine);
+  else fm = `${fm}\n${tagsLine}`;
+  return `---\n${fm}\n---\n`;
 }
 
 function fmtDate(d) {
@@ -192,27 +230,30 @@ function wikiTargets(body) {
   while ((m = re.exec(body || ''))) out.push(m[1].trim());
   return out;
 }
-// One folder per OKF `type`, all under knowledge/. A note's `name` is its path
-// relative to knowledge/ (no extension) — not just the filename — so the
-// OKF-reserved `index.md`/`log.md` names can exist once per folder without colliding.
-const TYPES = ['note', 'project', 'reference', 'decision', 'log'];
+// Folders under knowledge/ are discovered at runtime (git tree, below) — nothing is
+// hardcoded, so any new knowledge/** subfolder shows up with zero code changes. A note's
+// `name` is its path relative to knowledge/ (no extension) — folder-prefixed, not just the
+// filename — so the OKF-reserved `index.md`/`log.md` names can exist once per folder
+// without colliding. `folder` is the first path segment (the OKF `type` folder).
+const folderLabel = (folder) => (folder || '').replace(/^knowledge\//, '');
 
 async function loadAllNotes() {
-  const perFolder = await Promise.all(TYPES.map(async (type) => {
-    let items;
-    try { items = await gh(`/repos/${CFG.repo}/contents/knowledge/${type}?ref=${CFG.branch}`, TOKEN); }
-    catch (e) { if (e.code === 404) return []; throw e; }
-    return items.filter((f) => f.type === 'file' && f.name.endsWith('.md')).map((f) => ({ ...f, fmType: type }));
-  }));
-  const files = perFolder.flat();
+  // One recursive tree call discovers every .md under knowledge/** — no folder list to maintain.
+  const tree = await gh(`/repos/${CFG.repo}/git/trees/${CFG.branch}?recursive=1`, TOKEN);
+  const files = (tree.tree || [])
+    .filter((f) => f.type === 'blob' && f.path.startsWith('knowledge/') && f.path.endsWith('.md')
+      && f.path.slice('knowledge/'.length).includes('/')) // skip stray files at knowledge/ root — notes live in type folders
+    .map((f) => {
+      const rel = f.path.slice('knowledge/'.length);
+      return { name: rel.replace(/\.md$/, ''), path: f.path, folder: rel.slice(0, rel.indexOf('/')) };
+    });
   NOTES = await Promise.all(files.map(async (f) => {
     const [data, commits] = await Promise.all([
       gh(`/repos/${CFG.repo}/contents/${f.path}?ref=${CFG.branch}`, TOKEN),
       gh(`/repos/${CFG.repo}/commits?path=${encodeURIComponent(f.path)}&sha=${CFG.branch}&per_page=1`, TOKEN).catch(() => []),
     ]);
     const updated = commits[0]?.commit?.committer?.date || null;
-    const name = `${f.fmType}/${f.name.replace(/\.md$/, '')}`;
-    return { name, path: f.path, sha: data.sha, updated, ...parseNote(decodeB64(data.content)) };
+    return { name: f.name, path: f.path, folder: f.folder, sha: data.sha, updated, ...parseNote(decodeB64(data.content)) };
   }));
   // True last-git-change wins over the frontmatter date (which is often an event
   // date set once and never touched again).
@@ -250,7 +291,7 @@ async function createNote({ title, date, type = 'note', tags = [], body = '' }) 
   const raw = buildFm({ title, date: d, type, tags }) + body + '\n';
   const result = await ghPut(`/repos/${CFG.repo}/contents/${path}`, TOKEN,
     { message: `create: ${title}`, content: encodeB64(raw), branch: CFG.branch });
-  const note = { name, path, sha: result.content.sha, updated: d, title, date: d, type, tags, body };
+  const note = { name, path, folder: type, sha: result.content.sha, updated: d, title, date: d, type, tags, body };
   NOTES.unshift(note);
   LINK_INDEX[name.toLowerCase()] = name;
   if (title) LINK_INDEX[title.toLowerCase()] = name;
@@ -289,7 +330,6 @@ async function openDaily() {
 // ── Props (date + tags), view + inline edit ────────────────────────────────────
 function propsView(n) {
   const chips = [];
-  if (n.type) chips.push(`<a class="chip chip-type" href="${hashFor(null, n.type)}"><span class="k">▣</span> ${esc(n.type)}</a>`);
   if (n.date) chips.push(`<span class="chip"><span class="k">📅</span> ${esc(fmtDate(n.date))}</span>`);
   (n.tags || []).forEach((t) => chips.push(`<a class="chip chip-tag" href="${hashFor(t, null)}"><span class="k">🏷</span> ${esc(t)}</a>`));
   return chips.join('');
@@ -470,7 +510,7 @@ async function saveNote() {
   const tagsEl = propsEl?.querySelector('.prop-tags');
   const newDate = dateEl ? (dateEl.value ? dateEl.value + 'T00:00:00.000Z' : '') : NOTE.date;
   const newTags = tagsEl ? tagsEl.value.split(',').map((s) => s.trim()).filter(Boolean) : NOTE.tags;
-  const raw = buildFm({ title: newTitle, date: newDate, type: NOTE.type, tags: newTags }) + newBody + '\n';
+  const raw = patchFm(NOTE.fmRaw, { title: newTitle, date: newDate, tags: newTags }) + newBody + '\n';
 
   try {
     const result = await ghPut(
@@ -504,17 +544,17 @@ async function saveNote() {
   }
 }
 
-// Build a list-route hash for a given tag/type filter combo (either may be null).
-function hashFor(tag, type) {
+// Build a list-route hash for a given tag/folder filter combo (either may be null).
+function hashFor(tag, folder) {
   const p = new URLSearchParams();
   if (tag) p.set('tag', tag);
-  if (type) p.set('type', type);
+  if (folder) p.set('folder', folder);
   const s = p.toString();
   return s ? `#/?${s}` : '#/';
 }
 
 // ── Views ─────────────────────────────────────────────────────────────────────
-async function renderList(activeTag, activeType) {
+async function renderList(activeTag, activeFolder) {
   showState('Loading notes…');
   clearFabs();
   NOTE = null;
@@ -525,8 +565,8 @@ async function renderList(activeTag, activeType) {
     return;
   }
   const pills = [];
-  if (activeTag) pills.push(`<a class="active-filter" href="${hashFor(null, activeType)}">🏷 ${esc(activeTag)} <span class="x">✕</span></a>`);
-  if (activeType) pills.push(`<a class="active-filter" href="${hashFor(activeTag, null)}">▣ ${esc(activeType)} <span class="x">✕</span></a>`);
+  if (activeTag) pills.push(`<a class="active-filter" href="${hashFor(null, activeFolder)}">🏷 ${esc(activeTag)} <span class="x">✕</span></a>`);
+  if (activeFolder) pills.push(`<a class="active-filter" href="${hashFor(activeTag, null)}">📁 ${esc(folderLabel(activeFolder))} <span class="x">✕</span></a>`);
   app.innerHTML = `<section class="list">
     <div class="list-head">
       <h2>Notes</h2>
@@ -548,7 +588,7 @@ async function renderList(activeTag, activeType) {
     const query = (q || '').trim().toLowerCase();
     let pool = NOTES.filter((n) =>
       (!activeTag || (n.tags || []).includes(activeTag)) &&
-      (!activeType || n.type === activeType));
+      (!activeFolder || n.folder === activeFolder));
     const hits = !query ? pool : pool.filter((n) =>
       (n.title || '').toLowerCase().includes(query) ||
       (n.tags || []).join(' ').toLowerCase().includes(query) ||
@@ -558,26 +598,26 @@ async function renderList(activeTag, activeType) {
         <a class="card" href="#/note/${encodeURIComponent(n.name)}">
           <div class="t">${esc(n.title) || n.name}</div>
           <div class="m">
-            ${n.type ? `<span class="type-chip" data-type="${esc(n.type)}">${esc(n.type)}</span>` : ''}
+            <span class="path-badge" data-folder="${esc(n.folder)}" title="${esc(n.path)}">${esc(folderLabel(n.folder))}</span>
             ${fmtDate(n.updated || n.date)}
           </div>
           ${(n.tags || []).length ? `<div class="tags">${(n.tags || []).map((t) => `<span class="tag-chip" data-tag="${esc(t)}">#${esc(t)}</span>`).join('')}</div>` : ''}
         </a>`).join('')
-      : `<div class="state">No notes match “${esc(query)}”${activeTag ? ` in #${esc(activeTag)}` : ''}${activeType ? ` (${esc(activeType)})` : ''}.</div>`;
+      : `<div class="state">No notes match “${esc(query)}”${activeTag ? ` in #${esc(activeTag)}` : ''}${activeFolder ? ` (${esc(folderLabel(activeFolder))})` : ''}.</div>`;
   };
   draw('');
   searchEl.addEventListener('input', () => draw(searchEl.value));
   cardsEl.addEventListener('click', (e) => {
     const tagChip = e.target.closest('.tag-chip');
-    const typeChip = e.target.closest('.type-chip');
+    const folderChip = e.target.closest('.path-badge');
     if (tagChip) {
       e.preventDefault(); e.stopPropagation();
       const t = tagChip.dataset.tag;
-      location.hash = hashFor(activeTag === t ? null : t, activeType);
-    } else if (typeChip) {
+      location.hash = hashFor(activeTag === t ? null : t, activeFolder);
+    } else if (folderChip) {
       e.preventDefault(); e.stopPropagation();
-      const ty = typeChip.dataset.type;
-      location.hash = hashFor(activeTag, activeType === ty ? null : ty);
+      const f = folderChip.dataset.folder;
+      location.hash = hashFor(activeTag, activeFolder === f ? null : f);
     }
   });
 }
@@ -586,14 +626,13 @@ async function renderNote(name) {
   showState('Loading…');
   clearFabs();
   document.body.classList.remove('editing');
-  const path = `knowledge/${name}.md`;
-  const [data] = await Promise.all([
-    gh(`/repos/${CFG.repo}/contents/${path}?ref=${CFG.branch}`, TOKEN),
-    ensureNotes(), // cache + link index, so [[links]] resolve and backlinks compute
-  ]);
+  await ensureNotes(); // cache + link index: [[links]] resolve, backlinks compute, and we learn the note's folder
+  const cached = NOTES.find((x) => x.name === name);
+  if (!cached) { showState('Note not found.', true); return; }
+  const data = await gh(`/repos/${CFG.repo}/contents/${cached.path}?ref=${CFG.branch}`, TOKEN);
   const n = parseNote(decodeB64(data.content));
 
-  NOTE = { name, path, sha: data.sha, title: n.title, date: n.date, type: n.type, tags: n.tags, body: n.body };
+  NOTE = { name, path: cached.path, folder: cached.folder, sha: data.sha, fmRaw: n.fmRaw, title: n.title, date: n.date, type: n.type, tags: n.tags, body: n.body };
 
   const backlinks = NOTES.filter((o) => o.name !== name && wikiTargets(o.body).some((t) => resolveLink(t) === name));
   const backlinksHtml = backlinks.length ? `
@@ -603,6 +642,7 @@ async function renderNote(name) {
     </section>` : '';
 
   app.innerHTML = `<article class="note">
+    <a class="path-badge" href="${hashFor(null, cached.folder)}" title="${esc(cached.path)}">${esc(folderLabel(cached.folder))}</a>
     <h1 class="title">${esc(n.title) || name}</h1>
     <div class="props">${propsView(NOTE)}</div>
     <div class="body">${marked.parse(n.body || '')}</div>
@@ -634,7 +674,7 @@ async function route() {
   const [path, qs = ''] = hash.split('?');
   try {
     if (path.startsWith('note/')) await renderNote(decodeURIComponent(path.slice(5)));
-    else { const p = new URLSearchParams(qs); await renderList(p.get('tag'), p.get('type')); }
+    else { const p = new URLSearchParams(qs); await renderList(p.get('tag'), p.get('folder')); }
   } catch (e) {
     if (e.code === 401) { askToken(); return; }
     if (e.code === 404) { showState('Notes not found. Check the repo/branch in config, and that your token can read it.', true); return; }
