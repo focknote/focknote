@@ -76,6 +76,26 @@ td.addRule('callout', {
   },
 });
 
+// ── Relative .md links ──────────────────────────────────────────────────────────
+// Besides [[wikilinks]], notes may cross-reference with plain Markdown links like
+// [foo](foo.md) or [foo](sub/foo.md). The default renderer keeps the relative href,
+// which the browser resolves against /read/ (a hash router) and 404s. Resolve the
+// bare filename against the note index instead; fall through to a normal link for
+// anything that isn't a relative .md reference (http(s), mailto, anchors, etc).
+marked.use({ renderer: {
+  link(href, title, text) {
+    if (!/^[^:#]+\.md(#.*)?$/i.test(href || '')) {
+      return `<a href="${esc(href)}"${title ? ` title="${esc(title)}"` : ''} target="_blank" rel="noopener">${text}</a>`;
+    }
+    const base = href.split('#')[0].split('/').pop().replace(/\.md$/i, '');
+    const name = resolveLink(base);
+    const cls = name ? 'wikilink' : 'wikilink broken';
+    const linkHref = name ? `#/note/${encodeURIComponent(name)}` : '#/';
+    const tip = name ? '' : ` title="No note named ${esc(base)}"`;
+    return `<a class="${cls}" href="${linkHref}" data-wikitarget="${esc(base)}"${tip}>${text}</a>`;
+  },
+} });
+
 const app = document.getElementById('app');
 const API = 'https://api.github.com';
 
@@ -147,7 +167,7 @@ function encodeB64(str) {
 // ── Frontmatter ───────────────────────────────────────────────────────────────
 function parseNote(raw) {
   const m = raw.match(/^---\n([\s\S]*?)\n---\n?([\s\S]*)$/);
-  if (!m) return { title: '', date: '', type: '', tags: [], body: raw };
+  if (!m) return { fmRaw: '', title: '', date: '', type: '', tags: [], body: raw };
   const fm = m[1], body = m[2];
   const title = (fm.match(/^title:\s*(.+)$/m) || [])[1]?.trim().replace(/^["']|["']$/g, '') || '';
   const date = (fm.match(/^date:\s*(.+)$/m) || [])[1]?.trim().replace(/^["']|["']$/g, '') || '';
@@ -160,12 +180,28 @@ function parseNote(raw) {
     const block = fm.match(/^tags:\s*\n((?:\s*-\s*.+\n?)+)/m);
     if (block) tags = block[1].split('\n').map((l) => (l.match(/-\s*(.+)/) || [])[1]?.trim().replace(/^["']|["']$/g, '')).filter(Boolean);
   }
-  return { title, date, type, tags, body };
+  return { fmRaw: fm, title, date, type, tags, body };
 }
 
+// New notes get a full frontmatter block from scratch.
 function buildFm({ title, date, type, tags }) {
   const tagStr = tags.length ? `\n${tags.map((t) => `  - ${t}`).join('\n')}` : ' []';
   return `---\ntitle: "${title.replace(/"/g, '\\"')}"\ndate: "${date}"\ntype: "${type}"\ntags:${tagStr}\n---\n`;
+}
+
+// Edits patch ONLY title/date/tags inside the original frontmatter block, leaving
+// `type` and any other custom keys byte-for-byte intact — no clobber on save.
+function patchFm(fmRaw, { title, date, tags }) {
+  let fm = fmRaw;
+  const titleLine = `title: "${title.replace(/"/g, '\\"')}"`;
+  fm = /^title:.*$/m.test(fm) ? fm.replace(/^title:.*$/m, titleLine) : `${titleLine}\n${fm}`;
+  const dateLine = `date: "${date}"`;
+  fm = /^date:.*$/m.test(fm) ? fm.replace(/^date:.*$/m, dateLine) : `${fm}\n${dateLine}`;
+  const tagsLine = `tags: [${tags.join(', ')}]`;
+  if (/^tags:\s*\n(?:\s*-\s*.+\n?)+/m.test(fm)) fm = fm.replace(/^tags:\s*\n(?:\s*-\s*.+\n?)+/m, `${tagsLine}\n`);
+  else if (/^tags:.*$/m.test(fm)) fm = fm.replace(/^tags:.*$/m, tagsLine);
+  else fm = `${fm}\n${tagsLine}`;
+  return `---\n${fm}\n---\n`;
 }
 
 function fmtDate(d) {
@@ -192,30 +228,31 @@ function wikiTargets(body) {
   while ((m = re.exec(body || ''))) out.push(m[1].trim());
   return out;
 }
-// One folder per OKF `type`, all under knowledge/. A note's `name` is its path
-// relative to knowledge/ (no extension) — not just the filename — so the
-// OKF-reserved `index.md`/`log.md` names can exist once per folder without colliding.
-const TYPES = ['note', 'project', 'reference', 'decision', 'log'];
-
+// A note's `name` is its path relative to knowledge/ (no extension) — not just the
+// filename — so reserved names like index.md/log.md can exist once per folder without
+// colliding. Folders are discovered at runtime (git tree below): drop a new
+// knowledge/<folder> in and it shows up with zero code changes here. (Sveltia CMS still
+// needs one `collections:` entry per folder in admin/config.yml to make it editable —
+// a CMS limitation, not something this reader controls.)
 async function loadAllNotes() {
-  const perFolder = await Promise.all(TYPES.map(async (type) => {
-    let items;
-    try { items = await gh(`/repos/${CFG.repo}/contents/knowledge/${type}?ref=${CFG.branch}`, TOKEN); }
-    catch (e) { if (e.code === 404) return []; throw e; }
-    return items.filter((f) => f.type === 'file' && f.name.endsWith('.md')).map((f) => ({ ...f, fmType: type }));
-  }));
-  const files = perFolder.flat();
-  NOTES = await Promise.all(files.map(async (f) => {
-    const [data, commits] = await Promise.all([
-      gh(`/repos/${CFG.repo}/contents/${f.path}?ref=${CFG.branch}`, TOKEN),
-      gh(`/repos/${CFG.repo}/commits?path=${encodeURIComponent(f.path)}&sha=${CFG.branch}&per_page=1`, TOKEN).catch(() => []),
-    ]);
+  // One recursive tree call discovers every .md under knowledge/** — no folder list to maintain.
+  const tree = await gh(`/repos/${CFG.repo}/git/trees/${CFG.branch}?recursive=1`, TOKEN);
+  const files = (tree.tree || [])
+    .filter((f) => f.type === 'blob' && f.path.startsWith('knowledge/') && f.path.endsWith('.md')
+      && f.path.split('/').pop() !== 'TEMPLATE.md')
+    .map((f) => ({ path: f.path, name: f.path.replace(/^knowledge\//, '').replace(/\.md$/, '') }));
+  const loaded = await Promise.all(files.map(async (f) => {
+    // A file vanishing between the tree read and this fetch must not sink the whole load.
+    let data;
+    try { data = await gh(`/repos/${CFG.repo}/contents/${f.path}?ref=${CFG.branch}`, TOKEN); }
+    catch (e) { if (e.code === 404) return null; throw e; }
+    // Last commit touching this file = true "last updated", unlike the frontmatter
+    // date/timestamp which is the event date and often shared across a whole ingest batch.
+    const commits = await gh(`/repos/${CFG.repo}/commits?path=${encodeURIComponent(f.path)}&sha=${CFG.branch}&per_page=1`, TOKEN).catch(() => []);
     const updated = commits[0]?.commit?.committer?.date || null;
-    const name = `${f.fmType}/${f.name.replace(/\.md$/, '')}`;
-    return { name, path: f.path, sha: data.sha, updated, ...parseNote(decodeB64(data.content)) };
+    return { name: f.name, path: f.path, sha: data.sha, updated, ...parseNote(decodeB64(data.content)) };
   }));
-  // True last-git-change wins over the frontmatter date (which is often an event
-  // date set once and never touched again).
+  NOTES = loaded.filter(Boolean);
   NOTES.sort((a, b) => new Date(b.updated || b.date || 0) - new Date(a.updated || a.date || 0));
   LINK_INDEX = {};
   for (const n of NOTES) {
@@ -223,7 +260,7 @@ async function loadAllNotes() {
     if (n.title) LINK_INDEX[n.title.toLowerCase()] = n.name;
     // Back-compat: [[welcome]] still resolves if "welcome" is unambiguous across
     // folders — full-path or title links always win when there's a clash.
-    const bare = n.name.slice(n.name.indexOf('/') + 1).toLowerCase();
+    const bare = n.name.slice(n.name.lastIndexOf('/') + 1).toLowerCase();
     if (!(bare in LINK_INDEX)) LINK_INDEX[bare] = n.name;
   }
   return NOTES;
@@ -470,7 +507,7 @@ async function saveNote() {
   const tagsEl = propsEl?.querySelector('.prop-tags');
   const newDate = dateEl ? (dateEl.value ? dateEl.value + 'T00:00:00.000Z' : '') : NOTE.date;
   const newTags = tagsEl ? tagsEl.value.split(',').map((s) => s.trim()).filter(Boolean) : NOTE.tags;
-  const raw = buildFm({ title: newTitle, date: newDate, type: NOTE.type, tags: newTags }) + newBody + '\n';
+  const raw = patchFm(NOTE.fmRaw, { title: newTitle, date: newDate, tags: newTags }) + newBody + '\n';
 
   try {
     const result = await ghPut(
@@ -593,7 +630,7 @@ async function renderNote(name) {
   ]);
   const n = parseNote(decodeB64(data.content));
 
-  NOTE = { name, path, sha: data.sha, title: n.title, date: n.date, type: n.type, tags: n.tags, body: n.body };
+  NOTE = { name, path, sha: data.sha, fmRaw: n.fmRaw, title: n.title, date: n.date, type: n.type, tags: n.tags, body: n.body };
 
   const backlinks = NOTES.filter((o) => o.name !== name && wikiTargets(o.body).some((t) => resolveLink(t) === name));
   const backlinksHtml = backlinks.length ? `
