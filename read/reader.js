@@ -97,6 +97,26 @@ td.addRule('callout', {
   },
 });
 
+// ── Relative .md links ──────────────────────────────────────────────────────────
+// Besides [[wikilinks]], notes may cross-reference with plain Markdown links like
+// [foo](foo.md) or [foo](sub/foo.md). The default renderer keeps the relative href,
+// which the browser resolves against /read/ (a hash router) and 404s. Resolve the
+// bare filename against the note index instead; fall through to a normal link for
+// anything that isn't a relative .md reference (http(s), mailto, anchors, etc).
+marked.use({ renderer: {
+  link(href, title, text) {
+    if (!/^[^:#]+\.md(#.*)?$/i.test(href || '')) {
+      return `<a href="${esc(href)}"${title ? ` title="${esc(title)}"` : ''} target="_blank" rel="noopener">${text}</a>`;
+    }
+    const base = href.split('#')[0].split('/').pop().replace(/\.md$/i, '');
+    const name = resolveLink(base);
+    const cls = name ? 'wikilink' : 'wikilink broken';
+    const linkHref = name ? `#/note/${encodeURIComponent(name)}` : '#/';
+    const tip = name ? '' : ` title="No note named ${esc(base)}"`;
+    return `<a class="${cls}" href="${linkHref}" data-wikitarget="${esc(base)}"${tip}>${text}</a>`;
+  },
+} });
+
 const app = document.getElementById('app');
 const API = 'https://api.github.com';
 
@@ -234,7 +254,9 @@ function wikiTargets(body) {
 // hardcoded, so any new knowledge/** subfolder shows up with zero code changes. A note's
 // `name` is its path relative to knowledge/ (no extension) — folder-prefixed, not just the
 // filename — so the OKF-reserved `index.md`/`log.md` names can exist once per folder
-// without colliding. `folder` is the first path segment (the OKF `type` folder).
+// without colliding. `folder` is the first path segment (the OKF `type` folder). (Sveltia
+// CMS still needs one `collections:` entry per folder in admin/config.yml to make it
+// editable — a CMS limitation, not something this reader controls.)
 const folderLabel = (folder) => (folder || '').replace(/^knowledge\//, '');
 
 async function loadAllNotes() {
@@ -242,21 +264,24 @@ async function loadAllNotes() {
   const tree = await gh(`/repos/${CFG.repo}/git/trees/${CFG.branch}?recursive=1`, TOKEN);
   const files = (tree.tree || [])
     .filter((f) => f.type === 'blob' && f.path.startsWith('knowledge/') && f.path.endsWith('.md')
-      && f.path.slice('knowledge/'.length).includes('/')) // skip stray files at knowledge/ root — notes live in type folders
+      && f.path.slice('knowledge/'.length).includes('/') // skip stray files at knowledge/ root — notes live in type folders
+      && f.path.split('/').pop() !== 'TEMPLATE.md')
     .map((f) => {
       const rel = f.path.slice('knowledge/'.length);
       return { name: rel.replace(/\.md$/, ''), path: f.path, folder: rel.slice(0, rel.indexOf('/')) };
     });
-  NOTES = await Promise.all(files.map(async (f) => {
-    const [data, commits] = await Promise.all([
-      gh(`/repos/${CFG.repo}/contents/${f.path}?ref=${CFG.branch}`, TOKEN),
-      gh(`/repos/${CFG.repo}/commits?path=${encodeURIComponent(f.path)}&sha=${CFG.branch}&per_page=1`, TOKEN).catch(() => []),
-    ]);
+  const loaded = await Promise.all(files.map(async (f) => {
+    // A file vanishing between the tree read and this fetch must not sink the whole load.
+    let data;
+    try { data = await gh(`/repos/${CFG.repo}/contents/${f.path}?ref=${CFG.branch}`, TOKEN); }
+    catch (e) { if (e.code === 404) return null; throw e; }
+    // Last commit touching this file = true "last updated", unlike the frontmatter
+    // date/timestamp which is the event date and often shared across a whole ingest batch.
+    const commits = await gh(`/repos/${CFG.repo}/commits?path=${encodeURIComponent(f.path)}&sha=${CFG.branch}&per_page=1`, TOKEN).catch(() => []);
     const updated = commits[0]?.commit?.committer?.date || null;
     return { name: f.name, path: f.path, folder: f.folder, sha: data.sha, updated, ...parseNote(decodeB64(data.content)) };
   }));
-  // True last-git-change wins over the frontmatter date (which is often an event
-  // date set once and never touched again).
+  NOTES = loaded.filter(Boolean);
   NOTES.sort((a, b) => new Date(b.updated || b.date || 0) - new Date(a.updated || a.date || 0));
   LINK_INDEX = {};
   for (const n of NOTES) {
@@ -264,7 +289,7 @@ async function loadAllNotes() {
     if (n.title) LINK_INDEX[n.title.toLowerCase()] = n.name;
     // Back-compat: [[welcome]] still resolves if "welcome" is unambiguous across
     // folders — full-path or title links always win when there's a clash.
-    const bare = n.name.slice(n.name.indexOf('/') + 1).toLowerCase();
+    const bare = n.name.slice(n.name.lastIndexOf('/') + 1).toLowerCase();
     if (!(bare in LINK_INDEX)) LINK_INDEX[bare] = n.name;
   }
   return NOTES;
