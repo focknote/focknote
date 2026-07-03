@@ -138,11 +138,11 @@ so a frictionless template → instance deploy loop is a prerequisite.
 **Sync model — shell flows template → instance; never clobber instance files.**
 
 - *Shell* (sync/push): `index.html`, `sw.js`, `admin/index.html`,
-  `admin/sveltia-cms.js`, `manifest.json`, `assets/icons/*`, `read/*`. Bump the
-  SW `CACHE` name on any shell change.
-- *Instance-only* (never overwrite): `admin/config.yml` (its `repo:` points at
-  the instance's notes repo) and `content/` (notes live in the separate notes
-  repo anyway).
+  `admin/sveltia-cms.js`, `manifest.json`, `assets/icons/*`, `read/*` **except
+  `read/config.yml`**. Bump the SW `CACHE` name on any shell change.
+- *Instance-only* (never overwrite): `read/config.yml` and `admin/config.yml`
+  (their `repo:` points at the instance's notes repo) and `content/` (notes live
+  in the separate notes repo anyway).
 
 A small `sync-shell` helper script will automate the copy + commit + push.
 

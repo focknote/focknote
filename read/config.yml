@@ -1,0 +1,13 @@
+# FockNote reader config — the /read/ app reads THIS file (not Sveltia's).
+#
+# The skill rewrites `repo:` below. Set it by hand only if wiring this up manually.
+#   Private mode (default): repo = your SEPARATE PRIVATE notes repo, e.g. you/focknote-notes
+#   Public mode:            repo = this same public repo, e.g. you/focknote
+# Pages serves only this app shell (code). Notes are read/written via the GitHub
+# API with YOUR token — never served by Pages — so private mode keeps them private.
+#
+# Instance-only file: template→instance shell syncs must never overwrite it
+# (same rule as admin/config.yml).
+
+repo: OWNER/NOTES_REPO   # <-- owner/repo of the repo that HOLDS YOUR NOTES
+branch: main

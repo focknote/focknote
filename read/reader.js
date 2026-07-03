@@ -121,24 +121,40 @@ const app = document.getElementById('app');
 const API = 'https://api.github.com';
 
 // ── Token ────────────────────────────────────────────────────────────────────
+// The reader keeps its own token; it never reads Sveltia's (sveltia-cms.user).
 function getToken() {
-  try {
-    const u = JSON.parse(localStorage.getItem('sveltia-cms.user') || 'null');
-    if (u && u.token) return u.token;
-  } catch {}
   return localStorage.getItem('focknote.token') || '';
 }
 function setToken(t) { localStorage.setItem('focknote.token', t); }
 
 // ── Config ───────────────────────────────────────────────────────────────────
-async function loadConfig() {
-  const res = await fetch('../admin/config.yml', { cache: 'no-cache' });
-  if (!res.ok) throw new Error('config.yml not found');
-  const text = await res.text();
+function parseConfig(text) {
   // Line-anchored so we match the real YAML keys, not a `repo:` mentioned in a comment.
   const repo = (text.match(/^\s*repo:\s*([^\s#]+)/m) || [])[1] || '';
   const branch = (text.match(/^\s*branch:\s*([^\s#]+)/m) || [])[1] || 'main';
   return { repo, branch };
+}
+function isPlaceholder(repo) {
+  return !repo || repo.includes('OWNER') || repo.includes('NOTES_REPO');
+}
+async function loadConfig() {
+  // The reader owns read/config.yml. Instances wired before it existed only have
+  // admin/config.yml, so fall back to that until Sveltia is removed.
+  let cfg = null;
+  try {
+    const res = await fetch('./config.yml', { cache: 'no-cache' });
+    if (res.ok) cfg = parseConfig(await res.text());
+  } catch {}
+  if (!cfg || isPlaceholder(cfg.repo)) {
+    const res = await fetch('../admin/config.yml', { cache: 'no-cache' });
+    if (!res.ok) {
+      if (cfg) return cfg; // placeholder read/config.yml, no admin fallback
+      throw new Error('config.yml not found');
+    }
+    const legacy = parseConfig(await res.text());
+    if (!isPlaceholder(legacy.repo) || !cfg) cfg = legacy;
+  }
+  return cfg;
 }
 
 // ── GitHub helpers ────────────────────────────────────────────────────────────
@@ -688,8 +704,8 @@ async function route() {
   if (!CFG) {
     try { CFG = await loadConfig(); } catch (e) { showState('Could not read config.yml.', true); return; }
   }
-  if (!CFG.repo || CFG.repo.includes('OWNER') || CFG.repo.includes('NOTES_REPO')) {
-    showState('This notebook isn’t wired up yet — <code>repo</code> in admin/config.yml is still a placeholder.', true);
+  if (isPlaceholder(CFG.repo)) {
+    showState('This notebook isn’t wired up yet — <code>repo</code> in read/config.yml is still a placeholder.', true);
     return;
   }
   TOKEN = getToken();
