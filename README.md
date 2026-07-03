@@ -18,7 +18,8 @@ lock-in.
 
 ## Set it up in 4 steps
 
-1. **[Use this template](../../generate)** → create your notebook repo (name it anything).
+1. **[Use this template](https://github.com/focknote/focknote/generate)** → create your
+   notebook repo (name it anything).
 2. Open `admin/config.yml` and set `backend.repo` to the repo that holds your notes
    (a separate **private** repo for private mode; **this** repo for a public garden).
 3. **Settings → Pages →** deploy from branch `main`, folder `/ (root)`.
@@ -26,8 +27,11 @@ lock-in.
    and write in place. The older `/admin/` Sveltia form stays available for bulk/admin
    work, but the main path is the read-and-edit app. Saving = a git commit.
 
-> 💡 Even faster: ask **Codex or Claude Code** to run the FockNote skill — it does all of
-> the above and hands you the live URL. See https://focknote.github.io.
+> 💡 Even faster: let an agent do it. In **Claude Code**:
+> `/plugin marketplace add focknote/focknote.github.io` → `/plugin install focknote@focknote`,
+> then ask *"stand up my FockNote notebook"*. **Codex** ships with the skill in
+> `.agents/skills/focknote/`. Either does all of the above and hands you the live URL.
+> Details: https://focknote.github.io.
 
 ## Private or public?
 

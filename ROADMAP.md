@@ -117,9 +117,13 @@ GitHub Contents API; PRs are only an optional future chat-agent mode.
       repo-aware coding agent.
 - [ ] Revisit Project-sync if chat needs standing read access to notes.
 
-## Dev / sync loop (Phase 2 prerequisite)
+## Dev / sync loop (OPEN — last remaining track)
 
-Phase 2 means many iterate → deploy → test cycles against a live instance.
+**Status:** Phases 1–3 shipped; this is the open item. The `sync-shell` helper
+below is not built yet, and live instances still need the shipped shell changes
+propagated manually.
+
+Phase 2 meant many iterate → deploy → test cycles against a live instance.
 Doing that with ad-hoc tokens, web-edits, and per-file API pushes is untenable,
 so a frictionless template → instance deploy loop is a prerequisite.
 
@@ -143,6 +147,9 @@ so a frictionless template → instance deploy loop is a prerequisite.
 A small `sync-shell` helper script will automate the copy + commit + push.
 
 ## Tooling idea — Playwright MCP
+
+**Status:** partially realized — Phase 3 was Edge-verified with ad-hoc Playwright
+runs; a standing MCP setup for the deploy → test loop is still an idea.
 
 Drive the real browser against the live notebook (sign in, open the editor,
 type, save, screenshot, confirm the commit landed). Automates the deploy → test
