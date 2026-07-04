@@ -7,7 +7,7 @@
  *    layer talks straight to GitHub over the network; we never cache reads/writes.
  * Bump CACHE when the vendored bundle is re-vendored to evict the old one.
  */
-const CACHE = 'focknote-v11-sveltia-0.166.3';
+const CACHE = 'focknote-v12-sveltia-0.166.3';
 
 const SHELL = [
   './',
@@ -15,6 +15,7 @@ const SHELL = [
   './manifest.json',
   './read/',
   './read/index.html',
+  './read/config.yml',
   './read/reader.css',
   './read/reader.js',
   './read/vendor/marked.esm.js',
@@ -50,6 +51,23 @@ self.addEventListener('fetch', (event) => {
   // Let everything cross-origin (GitHub API, avatars, media CDN) hit the network untouched.
   if (url.origin !== self.location.origin) return;
 
+  // Configs are wired per-instance after the first deploy — network-first so an
+  // edited repo: shows up without waiting for a cache bump; cache only when offline.
+  if (url.pathname.endsWith('/config.yml')) {
+    event.respondWith(
+      fetch(request)
+        .then((resp) => {
+          if (resp.ok) {
+            const copy = resp.clone();
+            caches.open(CACHE).then((c) => c.put(request, copy));
+          }
+          return resp;
+        })
+        .catch(() => caches.match(request, { ignoreSearch: true }).then((c) => c || Response.error()))
+    );
+    return;
+  }
+
   event.respondWith(
     // ignoreSearch so Sveltia's cache-busted config.yml?... still hits the precache.
     caches.match(request, { ignoreSearch: true }).then((cached) => {
@@ -63,8 +81,8 @@ self.addEventListener('fetch', (event) => {
           return resp;
         })
         .catch(() => {
-          // Offline navigation → fall back to the cached app shell.
-          if (request.mode === 'navigate') return caches.match('./admin/');
+          // Offline navigation → fall back to the cached app shell (reader is the main surface).
+          if (request.mode === 'navigate') return caches.match('./read/');
           return Response.error();
         });
     })

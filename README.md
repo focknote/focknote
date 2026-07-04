@@ -20,8 +20,10 @@ lock-in.
 
 1. **[Use this template](https://github.com/focknote/focknote/generate)** → create your
    notebook repo (name it anything).
-2. Open `admin/config.yml` and set `backend.repo` to the repo that holds your notes
+2. Open `read/config.yml` and set `repo` to the repo that holds your notes
    (a separate **private** repo for private mode; **this** repo for a public garden).
+   Using the `/admin/` Sveltia fallback too? Set `backend.repo` in `admin/config.yml`
+   to the same value.
 3. **Settings → Pages →** deploy from branch `main`, folder `/ (root)`.
 4. Open `https://<you>.github.io/<repo>/read/`, tap **Install app**, **Sign in with Token**,
    and write in place. The older `/admin/` Sveltia form stays available for bulk/admin
